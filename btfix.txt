@@ -1,0 +1,73 @@
+BACKTEST  last week (Mon-Fri 2026-07-20 .. 2026-07-24)  symbols=AAPL,MSFT,AMZN,GOOGL,META,NVDA,TSLA
+Replaying real 1-min Alpaca option bars through the v2 engine. Quotes synthesized; 1-min granularity. SHADOW accounting.
+
+==================================================================================
+Mon 2026-07-20
+  expiry used: AAPL=0DTE  MSFT=0DTE  AMZN=0DTE  GOOGL=0DTE  META=0DTE  NVDA=0DTE  TSLA=0DTE
+----------------------------------------------------------------------------------
+  08:31  ENTER TSLA  CALL     385 @ $2.88  wave=TSLA-C-1  score=88 z=8.0 share=50% ctrl=0.65 [COORDINATED_CHAIN/EARLY]
+  14:55   EXIT  TSLA  CALL   EOD_FLATTEN (-100%)  wave=TSLA-C-1
+  -> 1 primary entry this day
+==================================================================================
+Tue 2026-07-21
+  expiry used: AAPL=1DTE  MSFT=1DTE  AMZN=1DTE  GOOGL=3DTE  META=1DTE  NVDA=1DTE  TSLA=3DTE
+----------------------------------------------------------------------------------
+  08:31  ENTER TSLA  CALL     375 @ $12.14  wave=TSLA-C-1  score=92 z=8.0 share=54% ctrl=0.82 [COORDINATED_CHAIN/EARLY]
+  08:40   EXIT  TSLA  CALL   CONTROL_TRANSFER (-4%)  wave=TSLA-C-1
+  09:55  ENTER GOOGL PUT      350 @ $10.69  wave=GOOGL-P-25  score=91 z=8.0 share=40% ctrl=0.65 [COORDINATED_CHAIN/EARLY]
+  10:25   EXIT  GOOGL PUT    CONTROL_FLIP_OVERWHELMING (+3%)  wave=GOOGL-P-25
+  11:20  ENTER MSFT  PUT      400 @ $4.79  wave=MSFT-P-32  score=98 z=8.0 share=51% ctrl=0.91 [SINGLE_STRIKE_DOMINANT/EARLY]
+  11:35   EXIT  MSFT  PUT    ROTATION (-7%)  wave=MSFT-P-32
+  11:57  ENTER AAPL  PUT    327.5 @ $1.96  wave=AAPL-P-41  score=93 z=3.6 share=53% ctrl=0.70 [SINGLE_STRIKE_DOMINANT/EARLY]
+  12:35   EXIT  AAPL  PUT    CONTROL_FLIP_OVERWHELMING (+22%)  wave=AAPL-P-41
+  13:12  ENTER TSLA  CALL     380 @ $11.99  wave=TSLA-C-45  score=97 z=8.0 share=93% ctrl=0.87 [SINGLE_STRIKE_DOMINANT/EARLY]
+  13:15   EXIT  TSLA  CALL   ROTATION (-2%)  wave=TSLA-C-45
+  13:25  ENTER TSLA  CALL     380 @ $12.05  wave=TSLA-C-52  score=97 z=3.9 share=78% ctrl=0.97 [SINGLE_STRIKE_DOMINANT/EARLY]
+  13:29  ENTER MSFT  CALL     400 @ $2.93  wave=MSFT-C-53  score=100 z=7.7 share=40% ctrl=1.00 [SINGLE_STRIKE_DOMINANT/EARLY]
+  13:29   EXIT  TSLA  CALL   ROTATION (-3%)  wave=TSLA-C-52
+  13:32   EXIT  MSFT  CALL   STATISTICAL_EXHAUSTION (-4%)  wave=MSFT-C-53
+  13:46  ENTER TSLA  PUT      380 @ $11.77  wave=TSLA-P-57  score=93 z=3.0 share=56% ctrl=0.84 [SINGLE_STRIKE_DOMINANT/EARLY]
+  14:55   EXIT  TSLA  PUT    EOD_FLATTEN (+0%)  wave=TSLA-P-57
+  -> 8 primary entries this day
+==================================================================================
+Wed 2026-07-22
+  expiry used: AAPL=0DTE  MSFT=0DTE  AMZN=0DTE  GOOGL=2DTE  META=0DTE  NVDA=0DTE  TSLA=2DTE
+----------------------------------------------------------------------------------
+  08:31  ENTER GOOGL PUT      345 @ $9.13  wave=GOOGL-P-1  score=99 z=8.0 share=42% ctrl=0.93 [SINGLE_STRIKE_DOMINANT/EARLY]
+  08:35   EXIT  GOOGL PUT    CONTROL_FLIP_OVERWHELMING (-1%)  wave=GOOGL-P-1
+  10:37  ENTER GOOGL CALL   347.5 @ $10.15  wave=GOOGL-C-22  score=97 z=8.0 share=39% ctrl=1.00 [SINGLE_STRIKE_DOMINANT/EARLY]
+  10:47   EXIT  GOOGL CALL   STATISTICAL_EXHAUSTION (+1%)  wave=GOOGL-C-22
+  10:56  ENTER GOOGL CALL   347.5 @ $10.61  wave=GOOGL-C-25  score=100 z=3.0 share=40% ctrl=1.00 [SINGLE_STRIKE_DOMINANT/EARLY]
+  12:52   EXIT  GOOGL CALL   STATISTICAL_EXHAUSTION (-5%)  wave=GOOGL-C-25
+  13:59  ENTER TSLA  CALL     375 @ $11.31  wave=TSLA-C-52  score=96 z=8.0 share=84% ctrl=0.95 [SINGLE_STRIKE_DOMINANT/EARLY]
+  14:55   EXIT  TSLA  CALL   EOD_FLATTEN (-10%)  wave=TSLA-C-52
+  -> 4 primary entries this day
+==================================================================================
+Thu 2026-07-23
+  expiry used: AAPL=1DTE  MSFT=1DTE  AMZN=1DTE  GOOGL=1DTE  META=1DTE  NVDA=1DTE  TSLA=1DTE
+----------------------------------------------------------------------------------
+  08:31  ENTER TSLA  PUT      335 @ $4.87  wave=TSLA-P-1  score=90 z=8.0 share=62% ctrl=0.77 [COORDINATED_CHAIN/EARLY]
+  08:41   EXIT  TSLA  PUT    ROTATION (+34%)  wave=TSLA-P-1
+  09:47  ENTER META  CALL     600 @ $9.86  wave=META-C-22  score=98 z=2.5 share=49% ctrl=0.96 [COORDINATED_CHAIN/EARLY]
+  10:23  ENTER NVDA  CALL     205 @ $3.29  wave=NVDA-C-28  score=90 z=4.0 share=64% ctrl=0.64 [SINGLE_STRIKE_DOMINANT/EARLY]
+  10:23   EXIT  META  CALL   ROTATION (-24%)  wave=META-C-22
+  11:24   EXIT  NVDA  CALL   STRUCTURAL_TP1 (+64%)  wave=NVDA-C-28
+  12:10  ENTER AAPL  CALL     320 @ $2.68  wave=AAPL-C-39  score=97 z=8.0 share=41% ctrl=0.92 [SINGLE_STRIKE_DOMINANT/EARLY]
+  12:14   EXIT  AAPL  CALL   STATISTICAL_EXHAUSTION (-3%)  wave=AAPL-C-39
+  14:43  ENTER NVDA  CALL     205 @ $3.21  wave=NVDA-C-36  score=95 z=3.3 share=73% ctrl=0.84 [COORDINATED_CHAIN/EARLY]
+  14:44   EXIT  NVDA  CALL   ROTATION (-4%)  wave=NVDA-C-36
+  14:56  ENTER NVDA  CALL     210 @ $1.15  wave=NVDA-C-62  score=86 z=3.2 share=52% ctrl=0.92 [COORDINATED_CHAIN/EARLY]
+  -> 6 primary entries this day
+==================================================================================
+Fri 2026-07-24
+  expiry used: AAPL=0DTE  MSFT=0DTE  AMZN=0DTE  GOOGL=0DTE  META=0DTE  NVDA=0DTE  TSLA=0DTE
+----------------------------------------------------------------------------------
+  10:21   EXIT  NVDA  CALL   STATISTICAL_EXHAUSTION (-31%)  wave=NVDA-C-62
+  -> 0 primary entries this day
+==================================================================================
+WEEK SUMMARY (wave-centric, per spec §20)
+  distinct waves entered : 17
+  primary entries        : 19   (avg 3.8/day; target <= 5/day)
+  duplicate in-wave entries: 2   (target 0)
+  closed                 : 19  win 32%  avg -4%  best 64%  worst -100%
+  exit reasons           : ROTATION=6, STATISTICAL_EXHAUSTION=5, EOD_FLATTEN=3, CONTROL_FLIP_OVERWHELMING=3, CONTROL_TRANSFER=1, STRUCTURAL_TP1=1

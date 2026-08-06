@@ -1,0 +1,28 @@
+MULTI-WEEK BACKTEST  4 weeks (2026-06-29 .. 2026-07-24)  symbols=AAPL,MSFT,AMZN,GOOGL,META,NVDA,TSLA
+Real 1-min Alpaca option bars replayed through the engine. Quotes synthesized; 1-min granularity; SHADOW accounting.
+
+==================================================================================
+WEEK 2026-06-29..2026-07-03:  2 entries (0.4/day)  win 50%  avg -19%  best 2%  worst -41%
+
+==================================================================================
+WEEK 2026-07-06..2026-07-10:  4 entries (0.8/day)  win 50%  avg -3%  best 63%  worst -41%
+
+==================================================================================
+WEEK 2026-07-13..2026-07-17:  4 entries (0.8/day)  win 25%  avg -15%  best 19%  worst -40%
+
+==================================================================================
+WEEK 2026-07-20..2026-07-24:  14 entries (2.8/day)  win 36%  avg +5%  best 66%  worst -15%
+
+##################################################################################
+MULTI-WEEK VALIDATION SUMMARY
+##################################################################################
+week                     entr  /day  win%   avg%  best%  worst%
+2026-06-29..2026-07-03      2   0.4    50    -19     +2     -41
+2026-07-06..2026-07-10      4   0.8    50     -3    +63     -41
+2026-07-13..2026-07-17      4   0.8    25    -15    +19     -40
+2026-07-20..2026-07-24     14   2.8    36     +5    +66     -15
+----------------------------------------------------------------------------------
+ALL WEEKS                  24   1.2    38     -1    +66     -41
+
+Profitable weeks: 1/4   Total closed: 24   Overall avg/trade: -1.4%
+Caveat: 1-min granularity, synthesized quotes, SHADOW fills — a directional check, not live P&L.

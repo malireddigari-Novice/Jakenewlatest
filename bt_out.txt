@@ -1,0 +1,269 @@
+BACKTEST  last week (Mon-Fri 2026-07-20 .. 2026-07-24)  symbols=AAPL,MSFT,AMZN,GOOGL,META,NVDA,TSLA
+Replaying real 1-min Alpaca option bars through the v2 engine. Quotes synthesized; 1-min granularity. SHADOW accounting.
+
+==============================================================================
+Mon 2026-07-20
+------------------------------------------------------------------------------
+  08:33  ENTER NVDA  CALL   207.5 @ $1.35   score=85 z=8.0 share=37% CALL_CONTROL [CHAIN]
+  08:44   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-22%)
+  08:49  ENTER TSLA  PUT      380 @ $2.52   score=83 z=1.2 share=69% PUT_CONTROL [EMERGENT]
+  08:57   EXIT  TSLA  PUT             STRUCTURAL_TP1 (+70%)
+  09:40  ENTER NVDA  CALL   207.5 @ $0.36   score=84 z=4.5 share=50% CALL_CONTROL [RAMP]
+  09:43   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-17%)
+  09:43  ENTER AAPL  CALL   327.5 @ $1.45   score=80 z=0.8 share=35% CALL_CONTROL [CHAIN]
+  09:46   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (-10%)
+  10:07  ENTER NVDA  CALL     205 @ $1.19   score=87 z=6.4 share=63% CALL_CONTROL [SINGLE_STRIKE]
+  10:37   EXIT  NVDA  CALL            TRAIL_GIVEBACK (+8%)
+  10:38  ENTER NVDA  CALL     205 @ $1.21   score=85 z=4.3 share=47% CALL_CONTROL [SINGLE_STRIKE]
+  10:40   EXIT  NVDA  CALL            CONTROL_FLIPPED (-11%)
+  10:45  ENTER NVDA  CALL     205 @ $1.26   score=88 z=7.0 share=66% CALL_CONTROL [SINGLE_STRIKE]
+  10:47   EXIT  NVDA  CALL            CONTROL_FLIPPED (-21%)
+  11:07  ENTER TSLA  CALL     375 @ $1.47   score=82 z=0.5 share=61% CALL_CONTROL [CHAIN]
+  11:12   EXIT  TSLA  CALL            STRUCTURAL_TP1 (+64%)
+  11:13  ENTER NVDA  CALL     205 @ $1.35   score=87 z=4.2 share=50% CALL_CONTROL [SINGLE_STRIKE]
+  11:16   EXIT  NVDA  CALL            CONTROL_FLIPPED (-24%)
+  11:47  ENTER NVDA  CALL     205 @ $0.53   score=89 z=4.6 share=58% CALL_CONTROL [SINGLE_STRIKE]
+  11:50   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-15%)
+  12:03  ENTER MSFT  PUT      400 @ $0.86   score=78 z=0.5 share=28% PUT_CONTROL [SINGLE_STRIKE]
+  12:07   EXIT  MSFT  PUT             CONTROL_FLIPPED (+8%)
+  12:10  ENTER NVDA  CALL   202.5 @ $1.21   score=86 z=4.1 share=53% CALL_CONTROL [SINGLE_STRIKE]
+  12:12   EXIT  NVDA  CALL            CONTROL_FLIPPED (-6%)
+  12:19  ENTER NVDA  CALL   202.5 @ $1.37   score=89 z=7.5 share=73% CALL_CONTROL [RAMP]
+  12:30   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (+6%)
+  12:35  ENTER TSLA  CALL   372.5 @ $0.97   score=78 z=0.2 share=45% CALL_CONTROL [CHAIN]
+  12:37   EXIT  TSLA  CALL            CONTROL_FLIPPED (-16%)
+  12:56  ENTER TSLA  CALL   372.5 @ $1.44   score=76 z=0.2 share=62% CALL_CONTROL_PUTS_AWAKENING [SINGLE_STRIKE]
+  13:01   EXIT  TSLA  CALL            ATTENTION_ROTATED_AWAY (+9%)
+  13:06  ENTER AAPL  CALL     325 @ $0.76   score=72 z=1.6 share=25% CALL_CONTROL [SINGLE_STRIKE]
+  13:19   EXIT  AAPL  CALL            STRUCTURAL_TP1 (+75%)
+  13:46  ENTER NVDA  CALL   202.5 @ $1.17   score=75 z=4.4 share=33% CALL_CONTROL [RAMP]
+  13:48   EXIT  NVDA  CALL            CONTROL_FLIPPED (-4%)
+==============================================================================
+Tue 2026-07-21
+------------------------------------------------------------------------------
+  08:39  ENTER TSLA  PUT      375 @ $11.87   score=82 z=1.7 share=78% PUT_CONTROL [EMERGENT]
+  08:42   EXIT  TSLA  PUT             CONTROL_FLIPPED (-2%)
+  08:53  ENTER NVDA  CALL     205 @ $3.98   score=76 z=1.0 share=33% CALL_CONTROL [CHAIN]
+  08:56   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-4%)
+  08:57  ENTER AAPL  CALL   322.5 @ $4.64   score=90 z=7.2 share=47% CALL_CONTROL [SINGLE_STRIKE]
+  09:58   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (+40%)
+  10:21  ENTER NVDA  CALL     205 @ $4.07   score=82 z=1.2 share=35% CALL_CONTROL [RAMP]
+  10:29   EXIT  NVDA  CALL            CONTROL_FLIP_OVERWHELMING (+3%)
+  10:40  ENTER TSLA  CALL     380 @ $12.85   score=84 z=0.2 share=76% CALL_CONTROL [CHAIN]
+  10:43   EXIT  TSLA  CALL            ATTENTION_ROTATED_AWAY (-1%)
+  10:45  ENTER GOOGL PUT      350 @ $10.89   score=80 z=2.1 share=40% PUT_CONTROL [CHAIN]
+  10:47   EXIT  GOOGL PUT             CONTROL_FLIPPED (-2%)
+  10:54  ENTER NVDA  PUT    207.5 @ $3.98   score=94 z=7.6 share=74% PUT_CONTROL [RAMP]
+  10:56   EXIT  NVDA  PUT             CONTROL_FLIPPED (-1%)
+  11:00  ENTER TSLA  PUT      380 @ $11.52   score=82 z=0.3 share=70% PUT_CONTROL [CHAIN]
+  11:03   EXIT  TSLA  PUT             CONTROL_FLIPPED (-2%)
+  11:06  ENTER NVDA  CALL   207.5 @ $2.79   score=87 z=6.1 share=80% CALL_CONTROL [SINGLE_STRIKE]
+  11:09   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-7%)
+  11:13  ENTER NVDA  PUT      205 @ $2.81   score=95 z=1.9 share=74% PUT_CONTROL [RAMP]
+  11:15   EXIT  NVDA  PUT             CONTROL_FLIPPED (-2%)
+  11:15  ENTER NVDA  CALL     205 @ $3.93   score=81 z=0.2 share=33% CALL_CONTROL [RAMP]
+  11:18   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-5%)
+  11:19  ENTER AAPL  CALL     330 @ $3.57   score=77 z=2.7 share=34% CALL_CONTROL [SINGLE_STRIKE]
+  11:22   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (-3%)
+  11:24  ENTER NVDA  PUT    207.5 @ $4.23   score=94 z=5.0 share=78% PUT_CONTROL [RAMP]
+  11:27   EXIT  NVDA  PUT             ATTENTION_ROTATED_AWAY (+5%)
+  11:30  ENTER NVDA  PUT      205 @ $3.26   score=75 z=1.9 share=67% PUT_CONTROL [SINGLE_STRIKE]
+  11:32   EXIT  NVDA  PUT             CONTROL_FLIPPED (-1%)
+  11:34  ENTER TSLA  PUT      380 @ $11.47   score=84 z=0.9 share=78% PUT_CONTROL [CHAIN]
+  11:37   EXIT  TSLA  PUT             CONTROL_FLIPPED (-1%)
+  11:40  ENTER GOOGL PUT      350 @ $10.68   score=82 z=7.8 share=46% PUT_CONTROL [CHAIN]
+  11:43   EXIT  GOOGL PUT             ATTENTION_ROTATED_AWAY (-2%)
+  11:43  ENTER NVDA  CALL   207.5 @ $2.31   score=86 z=0.3 share=54% CALL_CONTROL [RAMP]
+  11:46   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-4%)
+  11:49  ENTER NVDA  PUT      205 @ $3.24   score=79 z=2.5 share=67% PUT_CONTROL [SINGLE_STRIKE]
+  11:51   EXIT  NVDA  PUT             CONTROL_FLIPPED (-4%)
+  11:54  ENTER META  CALL     650 @ $12.57   score=76 z=7.3 share=31% CALL_CONTROL [CHAIN]
+  12:00   EXIT  META  CALL            ATTENTION_ROTATED_AWAY (-9%)
+  12:10  ENTER TSLA  CALL     380 @ $12.20   score=91 z=8.0 share=90% CALL_CONTROL [SINGLE_STRIKE]
+  12:12   EXIT  TSLA  CALL            CONTROL_FLIPPED (-4%)
+  12:16  ENTER NVDA  CALL     205 @ $4.09   score=87 z=1.6 share=42% CALL_CONTROL [RAMP]
+  12:19   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-3%)
+  12:25  ENTER META  PUT      645 @ $11.22   score=78 z=1.7 share=23% PUT_CONTROL [SINGLE_STRIKE]
+  12:28   EXIT  META  PUT             ATTENTION_ROTATED_AWAY (-4%)
+  12:32  ENTER NVDA  PUT      205 @ $2.50   score=86 z=4.1 share=73% PUT_CONTROL [SINGLE_STRIKE]
+  12:34   EXIT  NVDA  PUT             CONTROL_FLIPPED (-4%)
+  12:34  ENTER NVDA  CALL   207.5 @ $2.97   score=82 z=0.8 share=43% CALL_CONTROL [CHAIN]
+  12:37   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-5%)
+  12:48  ENTER TSLA  PUT      380 @ $11.94   score=81 z=0.4 share=73% PUT_CONTROL [CHAIN]
+  12:51   EXIT  TSLA  PUT             CONTROL_FLIPPED (-2%)
+  12:52  ENTER AAPL  CALL   327.5 @ $3.88   score=81 z=2.8 share=38% CALL_CONTROL [CHAIN]
+  13:01   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (+2%)
+  13:01  ENTER TSLA  CALL     380 @ $11.99   score=73 z=0.1 share=70% CALL_CONTROL_PUTS_AWAKENING [SINGLE_STRIKE]
+  13:07   EXIT  TSLA  CALL            CONTROL_FLIPPED (-1%)
+  13:12  ENTER TSLA  CALL     380 @ $11.99   score=91 z=8.0 share=92% CALL_CONTROL [SINGLE_STRIKE]
+  13:14   EXIT  TSLA  CALL            CONTROL_FLIPPED (-2%)
+  13:25  ENTER TSLA  CALL     380 @ $12.05   score=88 z=4.7 share=82% CALL_CONTROL [SINGLE_STRIKE]
+  13:28   EXIT  TSLA  CALL            ATTENTION_ROTATED_AWAY (-3%)
+  13:35  ENTER TSLA  PUT      380 @ $11.68   score=88 z=1.8 share=80% PUT_CONTROL [SINGLE_STRIKE]
+  13:38   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-0%)
+  13:44  ENTER AAPL  CALL     330 @ $3.11   score=76 z=1.8 share=28% CALL_CONTROL [RAMP]
+  13:47   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (-7%)
+  13:50  ENTER GOOGL CALL     350 @ $10.14   score=79 z=6.8 share=38% CALL_CONTROL [SINGLE_STRIKE]
+  13:53   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-2%)
+  13:55  ENTER GOOGL CALL     350 @ $10.27   score=76 z=4.1 share=33% CALL_CONTROL [CHAIN]
+  13:58   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-3%)
+  13:59  ENTER TSLA  PUT      380 @ $12.48   score=82 z=1.0 share=73% PUT_CONTROL_CALLS_AWAKENING [RAMP]
+  14:06   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-2%)
+  14:11  ENTER AAPL  CALL   327.5 @ $4.44   score=91 z=6.3 share=54% CALL_CONTROL [SINGLE_STRIKE]
+  14:14   EXIT  AAPL  CALL            CONTROL_FLIPPED (-9%)
+  14:27  ENTER TSLA  CALL   377.5 @ $11.84   score=90 z=7.6 share=90% CALL_CONTROL [SINGLE_STRIKE]
+  14:30   EXIT  TSLA  CALL            CONTROL_FLIPPED (-5%)
+  14:41  ENTER NVDA  CALL     205 @ $4.48   score=82 z=2.9 share=36% CALL_CONTROL [RAMP]
+  14:43   EXIT  NVDA  CALL            CONTROL_FLIPPED (-4%)
+  14:44  ENTER AAPL  CALL     330 @ $3.04   score=88 z=8.0 share=50% CALL_CONTROL [SINGLE_STRIKE]
+  14:48   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (-6%)
+  14:48  ENTER MSFT  PUT      395 @ $4.90   score=72 z=3.4 share=25% PUT_CONTROL [SINGLE_STRIKE]
+  14:51   EXIT  MSFT  PUT             CONTROL_FLIPPED (+1%)
+==============================================================================
+Wed 2026-07-22
+------------------------------------------------------------------------------
+  08:31  ENTER GOOGL PUT      345 @ $9.13   score=81 z=8.0 share=40% PUT_CONTROL [RAMP]
+  08:34   EXIT  GOOGL PUT             ATTENTION_ROTATED_AWAY (-4%)
+  08:42  ENTER NVDA  CALL   207.5 @ $1.18   score=90 z=5.5 share=40% CALL_CONTROL [SINGLE_STRIKE]
+  08:47   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-26%)
+  08:53  ENTER TSLA  CALL     380 @ $11.44   score=76 z=0.8 share=58% CALL_CONTROL [EMERGENT]
+  08:58   EXIT  TSLA  CALL            ATTENTION_ROTATED_AWAY (-4%)
+  09:00  ENTER AMZN  CALL   247.5 @ $0.65   score=72 z=8.0 share=21% CALL_CONTROL [RAMP]
+  09:09   EXIT  AMZN  CALL            ATTENTION_ROTATED_AWAY (+3%)
+  09:14  ENTER AAPL  PUT      325 @ $1.20   score=77 z=1.5 share=26% PUT_CONTROL [SINGLE_STRIKE]
+  09:17   EXIT  AAPL  PUT             ATTENTION_ROTATED_AWAY (-4%)
+  09:32  ENTER NVDA  CALL   207.5 @ $0.73   score=85 z=0.5 share=34% CALL_CONTROL [CHAIN]
+  09:35   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-2%)
+  09:37  ENTER TSLA  PUT      375 @ $9.77   score=77 z=1.0 share=62% PUT_CONTROL [RAMP]
+  09:40   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-1%)
+  09:52  ENTER NVDA  CALL   207.5 @ $1.28   score=90 z=0.9 share=50% CALL_CONTROL [SINGLE_STRIKE]
+  09:58   EXIT  NVDA  CALL            STRUCTURAL_TP1 (+72%)
+  10:26  ENTER TSLA  PUT    377.5 @ $10.62   score=80 z=1.1 share=59% PUT_CONTROL [SINGLE_STRIKE]
+  10:29   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-1%)
+  10:34  ENTER NVDA  PUT    212.5 @ $1.21   score=71 z=0.2 share=72% PUT_CONTROL [SINGLE_STRIKE]
+  10:36   EXIT  NVDA  PUT             CONTROL_FLIPPED (-12%)
+  10:37  ENTER GOOGL CALL   347.5 @ $10.15   score=76 z=6.8 share=35% CALL_CONTROL [SINGLE_STRIKE]
+  10:39   EXIT  GOOGL CALL            CONTROL_FLIPPED (-1%)
+  10:43  ENTER GOOGL CALL   347.5 @ $10.46   score=81 z=5.4 share=48% CALL_CONTROL [SINGLE_STRIKE]
+  10:46   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-2%)
+  11:04  ENTER TSLA  PUT      380 @ $11.88   score=80 z=3.8 share=72% PUT_CONTROL [SINGLE_STRIKE]
+  11:06   EXIT  TSLA  PUT             CONTROL_FLIPPED (-4%)
+  11:08  ENTER GOOGL CALL   347.5 @ $10.61   score=76 z=2.1 share=40% CALL_CONTROL [SINGLE_STRIKE]
+  11:11   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-2%)
+  11:20  ENTER TSLA  CALL     380 @ $9.90   score=76 z=2.0 share=55% CALL_CONTROL [CHAIN]
+  11:22   EXIT  TSLA  CALL            CONTROL_FLIPPED (-2%)
+  12:26  ENTER GOOGL PUT      350 @ $11.10   score=76 z=0.8 share=30% PUT_CONTROL [RAMP]
+  12:29   EXIT  GOOGL PUT             ATTENTION_ROTATED_AWAY (-1%)
+  12:32  ENTER TSLA  CALL   377.5 @ $10.74   score=71 z=1.0 share=37% CALL_CONTROL [EMERGENT]
+  12:35   EXIT  TSLA  CALL            CONTROL_FLIPPED (-3%)
+  12:49  ENTER GOOGL CALL   347.5 @ $10.30   score=82 z=4.0 share=61% CALL_CONTROL [SINGLE_STRIKE]
+  12:52   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-2%)
+  13:17  ENTER GOOGL CALL     345 @ $10.77   score=80 z=1.2 share=41% CALL_CONTROL [RAMP]
+  13:19   EXIT  GOOGL CALL            CONTROL_FLIP_OVERWHELMING (-2%)
+  13:33  ENTER TSLA  PUT    377.5 @ $12.11   score=81 z=4.7 share=72% PUT_CONTROL [SINGLE_STRIKE]
+  13:38   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-2%)
+  13:38  ENTER AAPL  CALL   322.5 @ $1.71   score=71 z=2.1 share=16% CALL_CONTROL [SINGLE_STRIKE]
+  14:00   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (+11%)
+  14:01  ENTER TSLA  CALL     375 @ $11.30   score=81 z=6.0 share=76% CALL_CONTROL [CHAIN]
+  14:05   EXIT  TSLA  CALL            CONTROL_FLIPPED (-1%)
+  14:06  ENTER GOOGL PUT      345 @ $9.53   score=86 z=8.0 share=78% PUT_CONTROL [SINGLE_STRIKE]
+  14:08   EXIT  GOOGL PUT             CONTROL_FLIPPED (-1%)
+  14:36  ENTER GOOGL CALL     345 @ $9.98   score=76 z=0.7 share=37% CALL_CONTROL [CHAIN]
+  14:39   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-0%)
+  14:53  ENTER TSLA  PUT      375 @ $11.53   score=78 z=1.3 share=59% PUT_CONTROL [EMERGENT]
+  14:55   EXIT  TSLA  PUT             EOD_FLATTEN (-1%)
+==============================================================================
+Thu 2026-07-23
+------------------------------------------------------------------------------
+  08:31  ENTER TSLA  PUT      335 @ $4.87   score=82 z=8.0 share=64% PUT_CONTROL [RAMP]
+  08:34   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (-11%)
+  09:28  ENTER META  CALL     610 @ $5.37   score=77 z=7.0 share=34% CALL_CONTROL [RAMP]
+  09:30   EXIT  META  CALL            CONTROL_FLIPPED (+6%)
+  09:33  ENTER NVDA  PUT    207.5 @ $1.99   score=73 z=2.2 share=31% PUT_CONTROL [CHAIN]
+  09:36   EXIT  NVDA  PUT             ATTENTION_ROTATED_AWAY (-4%)
+  09:37  ENTER META  CALL     610 @ $4.82   score=72 z=3.8 share=22% CALL_CONTROL [RAMP]
+  09:39   EXIT  META  CALL            CONTROL_FLIPPED (+17%)
+  09:39  ENTER NVDA  CALL     210 @ $1.64   score=80 z=0.9 share=33% CALL_CONTROL [RAMP]
+  09:42   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-10%)
+  09:59  ENTER META  CALL     600 @ $8.43   score=81 z=1.7 share=43% CALL_CONTROL [CHAIN]
+  10:01   EXIT  META  CALL            CONTROL_FLIPPED (-6%)
+  10:16  ENTER META  CALL     600 @ $7.57   score=84 z=6.8 share=58% CALL_CONTROL [CHAIN]
+  10:18   EXIT  META  CALL            CONTROL_FLIPPED (-4%)
+  10:18  ENTER NVDA  CALL   207.5 @ $1.98   score=73 z=0.5 share=35% CALL_CONTROL [SINGLE_STRIKE]
+  10:26   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-9%)
+  10:27  ENTER META  CALL     600 @ $6.79   score=84 z=5.4 share=60% CALL_CONTROL [SINGLE_STRIKE]
+  10:30   EXIT  META  CALL            CONTROL_FLIPPED (-5%)
+  10:40  ENTER GOOGL CALL     320 @ $3.05   score=84 z=4.8 share=44% CALL_CONTROL [SINGLE_STRIKE]
+  10:43   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (-10%)
+  10:49  ENTER META  CALL     600 @ $6.62   score=78 z=2.4 share=29% CALL_CONTROL [SINGLE_STRIKE]
+  10:52   EXIT  META  CALL            CONTROL_FLIPPED (+1%)
+  10:55  ENTER TSLA  CALL     325 @ $4.11   score=81 z=0.4 share=48% CALL_CONTROL [RAMP]
+  11:06   EXIT  TSLA  CALL            ATTENTION_ROTATED_AWAY (+17%)
+  11:06  ENTER AAPL  PUT      320 @ $1.95   score=75 z=3.4 share=25% PUT_CONTROL [SINGLE_STRIKE]
+  11:09   EXIT  AAPL  PUT             CONTROL_FLIPPED (-14%)
+  11:12  ENTER GOOGL CALL     320 @ $3.74   score=84 z=2.9 share=38% CALL_CONTROL [SINGLE_STRIKE]
+  11:32   EXIT  GOOGL CALL            ATTENTION_ROTATED_AWAY (+3%)
+  11:32  ENTER NVDA  CALL     210 @ $2.04   score=94 z=8.0 share=81% CALL_CONTROL [SINGLE_STRIKE]
+  11:48   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-2%)
+  12:05  ENTER NVDA  CALL     210 @ $1.86   score=89 z=1.6 share=68% CALL_CONTROL [CHAIN]
+  12:08   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-1%)
+  12:10  ENTER AAPL  CALL     320 @ $2.68   score=85 z=7.6 share=35% CALL_CONTROL [SINGLE_STRIKE]
+  12:13   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (-3%)
+  12:35  ENTER NVDA  CALL     210 @ $1.90   score=78 z=1.0 share=52% CALL_CONTROL [SINGLE_STRIKE]
+  12:37   EXIT  NVDA  CALL            CONTROL_FLIPPED (-12%)
+  12:39  ENTER AMZN  PUT      235 @ $2.36   score=75 z=2.0 share=28% PUT_CONTROL [SINGLE_STRIKE]
+  12:41   EXIT  AMZN  PUT             CONTROL_FLIPPED (-0%)
+  13:00  ENTER NVDA  PUT    207.5 @ $1.31   score=89 z=0.8 share=59% PUT_CONTROL [RAMP]
+  13:04   EXIT  NVDA  PUT             ATTENTION_ROTATED_AWAY (+4%)
+  13:12  ENTER AAPL  PUT      320 @ $2.05   score=88 z=7.4 share=52% PUT_CONTROL [SINGLE_STRIKE]
+  13:15   EXIT  AAPL  PUT             ATTENTION_ROTATED_AWAY (-6%)
+  13:18  ENTER NVDA  CALL     210 @ $1.25   score=88 z=0.9 share=70% CALL_CONTROL [CHAIN]
+  13:30   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (+9%)
+  13:38  ENTER NVDA  PUT      210 @ $3.04   score=85 z=0.9 share=61% PUT_CONTROL [RAMP]
+  13:41   EXIT  NVDA  PUT             ATTENTION_ROTATED_AWAY (+0%)
+  13:42  ENTER NVDA  CALL   207.5 @ $2.29   score=86 z=2.3 share=67% CALL_CONTROL [SINGLE_STRIKE]
+  13:44   EXIT  NVDA  CALL            CONTROL_FLIPPED (-7%)
+  13:52  ENTER META  CALL     610 @ $5.40   score=86 z=8.0 share=63% CALL_CONTROL [RAMP]
+  13:55   EXIT  META  CALL            ATTENTION_ROTATED_AWAY (-4%)
+  14:11  ENTER META  CALL     610 @ $4.39   score=78 z=4.2 share=24% CALL_CONTROL [RAMP]
+  14:14   EXIT  META  CALL            ATTENTION_ROTATED_AWAY (+4%)
+  14:26  ENTER META  CALL     610 @ $5.41   score=84 z=5.8 share=40% CALL_CONTROL [RAMP]
+  14:31   EXIT  META  CALL            ATTENTION_ROTATED_AWAY (-9%)
+  14:37  ENTER GOOGL PUT      320 @ $4.23   score=78 z=7.5 share=36% PUT_CONTROL [CHAIN]
+  14:40   EXIT  GOOGL PUT             ATTENTION_ROTATED_AWAY (-3%)
+  14:41  ENTER GOOGL PUT    317.5 @ $2.72   score=81 z=5.3 share=39% PUT_CONTROL [SINGLE_STRIKE]
+  14:44   EXIT  GOOGL PUT             ATTENTION_ROTATED_AWAY (-7%)
+  14:46  ENTER NVDA  CALL     205 @ $3.18   score=86 z=1.0 share=49% CALL_CONTROL [RAMP]
+  14:53   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (+7%)
+  14:54  ENTER TSLA  CALL     325 @ $2.88   score=71 z=3.5 share=46% CALL_CONTROL [CHAIN]
+  14:55   EXIT  TSLA  CALL            EOD_FLATTEN (+20%)
+  14:56  ENTER NVDA  CALL     210 @ $1.15   score=78 z=3.4 share=51% CALL_CONTROL [SINGLE_STRIKE]
+==============================================================================
+Fri 2026-07-24
+------------------------------------------------------------------------------
+  08:32   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-57%)
+  08:33  ENTER TSLA  PUT      320 @ $3.26   score=73 z=8.0 share=45% PUT_CONTROL_CALLS_AWAKENING [SINGLE_STRIKE]
+  08:36   EXIT  TSLA  PUT             ATTENTION_ROTATED_AWAY (+8%)
+  08:45  ENTER AAPL  CALL     325 @ $2.08   score=75 z=1.5 share=27% CALL_CONTROL [CHAIN]
+  08:58   EXIT  AAPL  CALL            ATTENTION_ROTATED_AWAY (+35%)
+  09:07  ENTER NVDA  CALL   207.5 @ $1.12   score=72 z=1.6 share=27% CALL_CONTROL [SINGLE_STRIKE]
+  09:19   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-29%)
+  09:55  ENTER NVDA  PUT    207.5 @ $0.74   score=86 z=4.4 share=55% PUT_CONTROL [SINGLE_STRIKE]
+  09:57   EXIT  NVDA  PUT             CONTROL_FLIP_OVERWHELMING (-31%)
+  11:00  ENTER TSLA  CALL   312.5 @ $1.12   score=81 z=0.5 share=55% CALL_CONTROL [CHAIN]
+  11:02   EXIT  TSLA  CALL            CONTROL_FLIPPED (-16%)
+  12:13  ENTER TSLA  CALL     310 @ $1.09   score=82 z=0.1 share=70% CALL_CONTROL [CHAIN]
+  12:15   EXIT  TSLA  CALL            CONTROL_FLIPPED (-5%)
+  12:42  ENTER NVDA  PUT      210 @ $0.64   score=75 z=0.5 share=28% PUT_CONTROL [CHAIN]
+  12:43   EXIT  NVDA  PUT             CONTROL_FLIP_OVERWHELMING (-7%)
+  12:51  ENTER AMZN  CALL   232.5 @ $0.95   score=74 z=8.0 share=24% CALL_CONTROL [SINGLE_STRIKE]
+  12:53   EXIT  AMZN  CALL            CONTROL_FLIPPED (-5%)
+  12:59  ENTER NVDA  PUT      210 @ $0.68   score=76 z=0.3 share=40% PUT_CONTROL [SINGLE_STRIKE]
+  13:01   EXIT  NVDA  PUT             CONTROL_FLIPPED (-8%)
+  13:06  ENTER NVDA  CALL     210 @ $0.35   score=87 z=1.9 share=41% CALL_CONTROL [SINGLE_STRIKE]
+  13:15   EXIT  NVDA  CALL            ATTENTION_ROTATED_AWAY (-38%)
+  13:20  ENTER NVDA  CALL     210 @ $0.18   score=91 z=0.7 share=50% CALL_CONTROL [SINGLE_STRIKE]
+  13:25   EXIT  NVDA  CALL            CONTROL_FLIPPED (-46%)
+==============================================================================
+WEEK SUMMARY: 124 entries, 124 closed, 28 winners (23% win)
+  avg trade: -2%   best 75%   worst -57%

@@ -1,0 +1,41 @@
+# Secrets — never commit
+.env
+*_token.json
+schwab_token.json
+did.bin
+
+# Runtime state / logs / data dumps
+jakenew_state.json
+gather_*.json
+backtest_*.txt
+*.log
+*.log.*
+*.err
+*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Backups (may hold sensitive token data)
+*.bak
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code tooling
+.claude/
+
+# Google service-account credentials (copied from Jakevolume) — NEVER commit
+*service_account*.json
+jakevolume-*.json
+*-adminsdk-*.json
+
+# Research data dumps / throwaway state
+*.jsonl
+bt_state.json

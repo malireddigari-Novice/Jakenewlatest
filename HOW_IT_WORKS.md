@@ -1,0 +1,588 @@
+# How Jakenew works — in plain words (v3: attention waves)
+
+Jakenew watches the Mag-7 (AAPL, MSFT, AMZN, GOOGL, META, NVDA, TSLA) and tries to catch the
+**small number of institutional accumulation events** that actually shape a session — the moment
+dormant option volume becomes a compact, dominant, statistically abnormal campaign **while the
+option is still cheap**. It is not a scanner for "big volume." One real campaign = **one wave =
+one trade**, held until its objective is met or the thesis genuinely dies.
+
+**Mode: ACTIVE on the Alpaca PAPER account** (`ALPACA_ENABLED=true`, `ALPACA_PAPER=true`) — it
+places **real orders with simulated money** (no real capital), a forward-test with real fills and
+spreads. Set `ALPACA_ENABLED=false` to return to SHADOW (log only). Risk controls in force: 1%
+sizing, one position at a time, −40% hard stop, EOD flatten.
+
+---
+
+## The core idea
+
+Volume alone means nothing. The engine asks five questions, in order:
+
+1. **Which ticker** is receiving the greatest share of *fresh, relevant* Mag-7 option premium?
+2. **Which side** (calls or puts) actually controls that ticker?
+3. Is this a **genuinely new attention wave**, or just another minute inside one we already know?
+4. Is the option **accumulating** (premium expanding while cheap) or **distributing** (heavy
+   volume while premium bleeds)?
+5. Has the wave **ended**, hit its objective, or **rotated** to another ticker?
+
+A trade is only born when a *new* wave, on the *controlling* side of the *attention-leading*
+ticker, shows *accumulation* while the contract is still near its value low. All of that is rolled
+into **one explicit verdict** — *"is this a genuine institutional campaign starting while convexity
+is still cheap?"* (see **The campaign verdict** below). The engine does not ask "did a threshold get
+crossed?"; it asks whether a campaign is being born.
+
+---
+
+## The trading day (times in Central)
+
+| Time | What happens |
+|---|---|
+| **~8:10 AM** | Scheduled task launches `main.py` (wakes the PC if asleep). Connects to Alpaca (+ Schwab if a token exists). Idle until 8:20. |
+| **8:20 – 8:30** | **Pre-open seeding.** Reads every contract every few seconds and records volume baselines — no trading. This is what lets the engine measure the opening auction as *fresh* flow instead of discarding it. |
+| **8:30** | **Open.** Fresh volume counts from the first seconds, including the opening burst (often the clearest institutional commitment of the day). |
+| **8:30 – 8:35** | **Opening window** — trading is live but the quality floors are raised ~1.4×. |
+| **8:35 → 2:55 PM** | Full-speed. The loop runs every **~5 seconds**, scoring over rolling **30s / 60s / 180s** windows. |
+| **2:55 PM** | End-of-day flatten — everything closed (same-day convexity is never carried). |
+
+**Expiry is dynamic** — each name uses its true nearest listed expiry (0DTE when it exists, else
+1DTE / the nearest weekly). It is *not* 0DTE-only. **Confirmation is DTE-sensitive** — a 0DTE has
+only ~30–90s before its convexity is gone, so it is promoted and entered on very little
+persistence; a 1DTE is allowed more; 2DTE+ demands the most (see the timing table below).
+
+---
+
+## Layer 1 — which ticker owns attention?
+
+Every poll, for each name, the engine turns option activity into **mass**:
+
+```
+mass(contract) = fresh_volume × option_price × 100 × strike_relevance
+```
+
+where `strike_relevance = exp(-α·|K−S|/S)` weights ATM ≈ 1, one strike ≈ 0.8, two ≈ 0.6, fading
+fast. Summed to CallMass / PutMass / TickerMass, and each ticker's **AttentionShare** = its mass ÷
+the whole Mag-7 pool.
+
+Then three things separate a *fresh surge* from activity that's merely *stayed elevated*:
+
+- **Fast / slow EWMA + Impulse** — a fast average reacts immediately, a slow one is the recent
+  norm; `Impulse = fast / slow` flags a genuine acceleration.
+- **Attention Shock (Z-score)** — how abnormal this is versus the ticker's *own* rolling baseline
+  (robust mean/MAD, always adapting so a wave that just sits elevated decays back toward zero). A
+  name doing 5× its normal outranks a name that's always busy.
+- **Velocity / Acceleration** — is mass rising, and is the rise speeding up?
+
+An **Attention Score** (35% share · 20% shock · 15% velocity · 10% acceleration · 10% side
+dominance · 10% strike quality) ranks all seven. Weights are research knobs, not gospel.
+
+---
+
+## Layer 2 — which side controls it?
+
+More call premium does **not** prove bullish call *buying* (it can be selling, spreads, rolls,
+hedges). Control blends premium share with the opposite side's **awakening** (is it accelerating?),
+**persistence** across polls, and **quote-location** (marks lifting the ask = buying). It resolves
+to one of five states: `CALL_CONTROL · CALL_CONTROL_PUTS_AWAKENING · BALANCED_CONTEST ·
+PUT_CONTROL_CALLS_AWAKENING · PUT_CONTROL`. A contested name is never traded.
+
+---
+
+## Layer 3 — the attention-wave state machine (one wave = one entry)
+
+Each ticker/side has one persistent **wave** with a unique id, moving through:
+
+```
+DORMANT → FORMING → ACTIVE → MATURE → DECAYING → ENDED
+```
+
+- **FORMING** — mass becomes abnormal (Z ≥ 2), share rising, side control meaningful, velocity
+  positive. The wave records its **event price** here (used later to judge accumulation). FORMING
+  is **tradeable** (we enter early to capture convexity) but only under a stricter early-asymmetry
+  test — see Entry.
+- **ACTIVE** — reached by one of two routes:
+  - **Fast route** (exceptional evidence now): overwhelming burst (Z ≥ 4, share ≥ 0.40, control
+    ≥ 0.70, velocity & acceleration positive) → promote immediately.
+  - **Slow route** (persistence develops): sustained (share ≥ 0.30, control ≥ 0.60, Z ≥ 3) for a
+    number of consecutive polls that **scales with DTE** (below).
+- **MATURE / DECAYING** — still dominant but acceleration turned negative / share falling.
+- **ENDED** — exhausted, control transferred, rotated away, a structural/EOD stop, or —
+  **`FAILED_FORMATION`** — a FORMING wave that never confirmed inside its DTE-sensitive maximum
+  window (the two-stage "upgrade or kill the thesis" made concrete).
+
+**DTE-sensitive confirmation / hold windows** (a fixed wait is wrong for options that decay at
+very different speeds):
+
+| DTE | Slow-route confirmations | Min-hold (young-wave protection) | Max FORMING window → FAILED_FORMATION |
+|---|--:|--:|--:|
+| **0DTE** | 1 | 120 s | 120 s |
+| **1DTE** | 2 | 180 s | 300 s |
+| **2DTE+** | 3 | 240 s | 600 s |
+| *unknown* | 3 | 180 s | none (old fixed behaviour) |
+
+A wave issues **at most one primary entry**. Every later elevated minute is a *wave update*
+(strengthening / peaking / decaying), **not** a new trade. This is what killed the old churn
+(the same idea used to fire ~25 entries/day; now it's a handful).
+
+---
+
+## Accumulation vs distribution — the price-response filter
+
+This is the piece that stops the engine buying "big volume" that is really people *getting out*.
+
+When a wave forms it stamps the option's **event price**. At entry the engine checks how the
+premium has **responded**:
+
+- **Accumulation** — premium is *expanding* off the event while the contract is still near its
+  value low, in a compact burst. Labeled `COMPACT_ACCUMULATION` / `PERSISTENT_ACCUMULATION` /
+  `SINGLE_STRIKE_ACCUMULATION` / `COORDINATED_CHAIN_ACCUMULATION`. **Tradeable.**
+- **Distribution** — heavy volume while the premium *collapses* or is already extended/mature, or
+  volume smeared broadly with no compact start. Labeled `HEAVY_VOLUME_NEGATIVE_RESPONSE` /
+  `MATURE_DISTRIBUTION` / `LATE_CHASING_ACTIVITY` / `DISTRIBUTED_BACKGROUND` /
+  `EXHAUSTION_ACTIVITY`. **Management info only — never a new entry.**
+
+It reads the contract's per-minute volume series into shape metrics — EventShare20, Top3Share20,
+DominantSingleBar, BurstPersistence, CompactCluster, PersistentDistributedFlow, and **VolumeSkew**
+(did the volume arrive early, centrally, or late in the window?) — and classifies the **event
+shape**: `DORMANT_BACKGROUND · ISOLATED_PRINT · COMPACT_SHOCK · PERSISTENT_COMPACT_WAVE ·
+DISTRIBUTED_BACKGROUND · MATURE_SCALING_ACTIVITY · DISTRIBUTION_AT_PREMIUM_HIGH ·
+STALE_OPENING_VOLUME · EXHAUSTION_OR_EXIT_FLOW`. Only `COMPACT_SHOCK` and `PERSISTENT_COMPACT_WAVE`
+(with a positive premium response) are entry-eligible. `DISTRIBUTION_AT_PREMIUM_HIGH` (heavy volume
+already extended from the low while the premium gives back) and `STALE_OPENING_VOLUME` (volume that
+arrived early and has since gone quiet) are explicit distribution/stale tells. The canonical
+positive case is the TSLA 312.5P pattern: dormant → compact abnormal shock near the contract low →
+premium expands immediately.
+
+### Single strike vs chain — chains must prove more
+
+A chain is a *synchronised shape*, not three mediocre strikes summed. To be a `COORDINATED_CHAIN`
+(not `SINGLE_STRIKE_DOMINANT`), two strikes must **each** own a meaningful share of the side's mass,
+a real second participant must exist (≥28% of side mass), and the top two together must dominate
+(≥70%). Chain entries then face a **1.5× higher notional floor** than single strikes. One strike
+carrying almost all the volume is correctly labeled `SINGLE_STRIKE_DOMINANT` — never a fake chain.
+
+---
+
+## Event shape *through time* — the same volume means different things at different moments
+
+Equal contract counts are not economically equal: 1,000 contracts at $1.00 (fresh accumulation
+near value) is not 1,000 at $6.00 (after a move — far more likely profit-taking, closing, or late
+chasing). So the engine measures not just *how much* flow, but **where in the option's life it
+arrives and how the price, IV and spot respond**. Every poll it computes, for the candidate
+contract:
+
+- **Response efficiency** — `ΔP% ÷ (fresh notional / $100k)`: how much premium progress each unit
+  of flow bought. High in early accumulation ($300k → +35%), low or negative in maturity /
+  distribution ($1.2M → flat). Its **decay** from the campaign's peak efficiency is a distribution
+  tell (more and more flow buying less and less progress).
+- **Relative-to-accumulation ratios** — current contracts / notional / premium vs the campaign's
+  *start*. Premium 6× the campaign start with flat response = maturity, not a fresh event.
+- **IV velocity (dIV/dt)** — IV rising/firm supports accumulation; IV rolling over while premium
+  stalls supports distribution. (Contributing signal; not always available in historical data.)
+- **Spot-direction confirmation (dS/dt)** — is the underlying moving the right way for the side?
+- **Delta-adjusted notional** — `contracts × price × 100 × |Δ|`, directional exposure rather than
+  gross dollars.
+- **Opposite-side acceleration** — is the *other* side building its own coherent campaign?
+
+These fold into a single **distribution probability** (a weighted logistic — no one component
+decides it): high when the premium is extended, response efficiency is decaying, the premium is
+already a large multiple of the campaign start, IV is rolling over, the premium is giving back from
+its peak, the opposite side is accelerating, and spot is not confirming. A high distribution
+probability **vetoes** a new entry and drives the **WATCH/REDUCE** trim on a live position.
+
+### Campaign lifecycle — self-sustainability, delayed convexity, continuation (`analysis/lifecycle.py`)
+
+The clearest institutional signatures are *temporal*. The engine measures the campaign's arc:
+
+- **Self-sustainability** — is the premium **still rising while the buying fades**? The AAPL/TSLA
+  signature: inventory is accumulated in a compact burst, volume then declines, yet the premium
+  keeps climbing — the move has become self-sustaining. High when recent volume has dropped well
+  below the campaign's peak *and* the recent premium slope is still positive; low when the premium
+  stalls the instant volume drops.
+- **Windowed premium response + delayed convexity** — response is judged across **30/60/90/180/300s**
+  windows plus **max-favourable-excursion** and the **area under the premium curve**, not just the
+  latest bar. A compact campaign that briefly **consolidated** — showed a real positive excursion
+  and, after a **shakeout** (dip below the event price that flushes weak hands), is recovering back
+  through it — is **not rejected** for a slightly-negative instant response (the NVDA-put case).
+  A genuine collapse below the delayed floor is still rejected.
+- **Premium-efficiency trend** — is `ΔP per unit flow` **RISING / STABLE / DECAYING** across polls?
+  A campaign that needs *less* incremental buying to keep rising is structurally healthier than one
+  needing ever more just to hold price.
+- **Continuation probability** — a joint 0-1 estimate the campaign continues (self-sustainability +
+  efficiency trend + premium persistence + control + spot + recovered shakeout). It blends into the
+  **P(continue)** term of expected-value entry timing.
+- **Expanded shape geometry** — Gini + entropy (concentration), decay-rate, volume half-life,
+  reacceleration (a second burst), and silence fraction round out the volume-through-time picture.
+
+---
+
+## The campaign verdict — the one question that decides a trade
+
+Everything above rolls into a single explicit assessment (`analysis/campaign.py`): **is this a
+genuine institutional campaign starting while convexity is still cheap?** A campaign is
+**CONFIRMED** only when all five entry signals hold *and* the combined conviction clears a minimum
+score. The verdict names the six campaign signals the detector exists to find:
+
+1. **WHERE capital is concentrating** — this ticker leads the Mag-7 fresh-premium pool
+2. **dormant WAKING UP** — a statistical shock (z ≥ 3)
+3. **accumulation BEGINNING** — positive premium response in a compact shape
+4. **who CONTROLS the tape** — the trade side owns ≥ 66% of fresh premium
+5. **still CHEAP** — the contract is ≤ 1.5× its value low
+6. **campaign ENDING** — narrated on exit (control transferred / rotated to a stronger campaign /
+   statistically exhausted / objective reached)
+
+The verdict is now **both linear and Bayesian**: the five-signal weighted score *and* a **Bayesian
+posterior** — a context prior (morning bias, DTE) updated by the likelihood ratio of each observed
+signal — must clear their thresholds. Entry then also requires **positive expected value**:
+
+```
+ExpectedEntryValue = P(continue) · RemainingConvexity − P(false) · ExpectedLoss
+```
+
+where `P(continue)` is the posterior, `RemainingConvexity` blends how fresh (un-run) and how cheap
+the contract still is, `P(false)` is the distribution probability, and `ExpectedLoss` ≈ the hard
+stop. The optimum is **not** maximum confirmation: as the engine waits, `P(continue)` rises but
+`RemainingConvexity` falls — so it enters at the *earliest positive-asymmetry* moment.
+
+Every entry logs a plain thesis — *"CAMPAIGN CONFIRMED — AAPL calls lead the Mag-7 (52% of fresh
+premium); dormant flow woke (z=4.2); accumulation begun; calls control the tape (0.90); still cheap
+(1.2× low)."* — plus `post=… dist=… ev=… eff=…`. Every exit logs *"CAMPAIGN ENDED: attention rotated
+to a stronger campaign."* This is §14/§15 made concrete: the engine thinks in campaigns, not thresholds.
+
+---
+
+## Entry — every condition must hold
+
+A new position opens only when **all** are true (and the unified campaign verdict is CONFIRMED):
+
+1. A **new wave** has reached entry-eligibility (FORMING or ACTIVE — we enter early, on value).
+2. The ticker **leads Mag-7 attention** (rank 1) and leads rank-2 by a real margin (or it sits out).
+3. **Control** belongs to the trade direction and owns the tape (≥ 66% of fresh premium).
+4. **Accumulation**, not distribution (positive premium response, compact shape) — *or* a
+   **delayed-convexity** campaign that briefly consolidated (positive prior excursion + recovering
+   shakeout), which is tolerated rather than rejected.
+5. The contract is **on value** — mark ≤ **1.5× its session low** (never chase after the pop).
+6. Freshness isn't `MISSED`, notional clears the floor (higher for chains), quote liquid / not stale.
+7. The **campaign verdict is CONFIRMED** — five signals present, linear score ≥ minimum, **and**
+   Bayesian posterior ≥ minimum.
+8. **Distribution probability** is below the entry veto, and **expected value is positive**.
+9. If the wave is still **FORMING** (not yet ACTIVE), it faces the **stricter early-asymmetry
+   test**: higher posterior, lower distribution probability, larger EV, and positive spot
+   confirmation. (Optional gates, off by default: delta-adjusted-notional floor, IV-firmness.)
+
+It buys the best contract among **ATM ± 1 strike** at a bounded limit (mid + small offset, capped
+at the ask — never a naked market order), sized at `TRADE_PCT` of portfolio, with duplicate-order
+protection. **No new entries in the final 15 minutes** before the flatten.
+
+---
+
+## Exits — two real reasons, plus a hard stop
+
+**A — Objective met (profit):** +60% → sell half · +150% → sell the rest · trailing giveback
+(once up +40%, give back 35% from the peak → out).
+
+**A′ — WATCH/REDUCE (deterioration, not yet death):** if the **distribution probability** rises
+past its reduce threshold *and* the premium has given back ≥15% from its peak while the wave thesis
+is still alive, the engine **trims once** to de-risk (distinct from the profit scale-out) and lets
+the remainder run to its objective or a real thesis exit.
+
+**B — Thesis died (asymmetric, so 0DTE gains aren't lost to slow confirmation):**
+- **Immediate** — the opposite side seizes overwhelming control (very high bar) → out at once.
+- **Confirmed control transfer** — opposite side genuinely controls (persistent) → out.
+- **Rotation** — another ticker confirms a stronger wave *and our own wave is already fading*
+  (a healthy leader is never abandoned for a briefly-higher score).
+- **Statistical exhaustion** — Z < 1, velocity ≤ 0, share < 0.15 for several polls.
+
+A **minimum-hold** protects a young wave from B for ~3 minutes (unless an overwhelming flip), so
+normal one-minute noise can't churn it. After a wave ends, a **refractory** (~12–20 min) prevents
+re-entering the same name on residual volume unless an exceptional fresh shock appears.
+
+**C — Hard stop-loss** — a risk backstop at −40% that fires regardless of thesis or min-hold,
+capping the per-trade tail. **No new entries** are opened within 15 minutes of the flatten (avoids
+late 0DTE lottery tickets and can't leave a fill open past the close).
+
+**D — 2:55 PM** flatten no matter what; the process then exits so the next day's launch starts
+fresh with the on-disk code.
+
+---
+
+## Next-architecture upgrades (built behind shadow flags, live behaviour frozen)
+
+A consolidated developer spec asked the engine to grow from an attention-wave detector into a
+**stateful, multi-expiration, multi-archetype institutional-campaign tracker**. That is being built
+in the spec's own priority order (P1→P8). **Every new layer is gated by a flag that defaults OFF**,
+so the validated live-paper entries/exits are *identical* to before until a backtest proves the new
+logic and the flag is turned on deliberately — the same shadow rollout used for the lifecycle layer.
+
+**P1 — campaign memory / stabilization (fix premature exits).** The old engine conflated three
+different things: a cooling Z-score, a lost attention rank, and campaign *death*. They are not the
+same — a big burst naturally becomes *less* statistically abnormal as time passes; that is not
+failure. With `STABILIZE_ENABLED=true` the wave machine gains a **STABILIZING** state: a wave that is
+cooling but **structurally intact** (still controls its side, faces no strong opposite-side campaign,
+is not distributing, and premium has not failed) moves ACTIVE→STABILIZING and *keeps its campaign
+memory* instead of decaying into a statistical-exhaustion exit. It returns to ACTIVE (same wave_id,
+no new entry) if it reaccelerates, and only accrues exhaustion on **coherent multi-signal
+deterioration** — or after it has stabilised far past `WAVE_STABILIZE_MAX_S` (15 min) without
+reviving. A **ROTATION** exit now also requires the incumbent's own campaign to be materially
+deteriorating (`ROTATION_REQUIRE_INCUMBENT_WEAK`), never just being out-ranked. This directly targets
+the observed one-to-six-minute scratch exits (`STATISTICAL_EXHAUSTION`/`ROTATION`) that closed
+still-controlled positions. Engine feeds a per-`(ticker,side)` structural-health read into the wave
+machine; with the flag off no health is computed and the code path is unchanged. Tests:
+`test_waves.py` (+3 stabilization checks). *Default OFF — pending backtest.*
+
+**P2 — early detection / latency (reduce detection lag).** The jump from "nothing" to "ENTER" was
+too large and gave no way to measure *how late* the engine acts. With `EARLY_DETECT_ENABLED=true`
+the wave machine gains two **observation-only** pre-entry stages recorded *before* the FORMING birth
+threshold: **WATCH** (first abnormal print with minimal one-sidedness) and **BUILDING** (sustained
+participation + emerging control). These record timestamps only — they do **not** change when the
+engine enters (still FORMING/ACTIVE + the §16/EV gates). At entry the engine now logs a **LATENCY**
+line — abnormal→alert, watch→alert, building→alert, accumulation→alert, premium drift (alert price ÷
+campaign-start price) — so detection/decision latency becomes a first-class, trackable metric. A new
+**EarlyAccumulationScore** (`campaign.early_accumulation_score`, always computed and logged, gates
+nothing on its own) scores the *earliest favorable phase* — fresh-premium velocity, abnormal
+participation, value proximity, emerging control, firming/recovering response, low distribution — and
+is deliberately distinct from mature campaign confidence. Tests: `test_waves.py` (+3 early-detection /
+EAS checks). *Default OFF for the WATCH/BUILDING logging; EAS computes harmlessly. Pending backtest.*
+
+**P3 — multi-expiration scanning (`analysis/expiry.py`).** The base engine centres on the *nearest*
+expiry, so a thesis expressed across expirations is invisible (NVDA 0DTE puts while Friday calls
+build; forward positioning ahead of a catalyst). With `MULTI_EXPIRY_ENABLED=true` the engine runs a
+**throttled shadow scan** (at most every `MULTI_EXPIRY_POLL_S`, default 60s) over several relevant
+expiries — the nearest (0DTE if listed), the nearest strictly-future, the current-week Friday, and
+the following weekly — and derives the **per-expiry share and controlling side**, the **near→forward
+migration** of capital over the session, and a structural classification (`SAME_DAY_ACCUMULATION`,
+`FORWARD_POSITIONING`, `SAME_SIDE_MULTI_EXPIRY_CONTROL`, `NEAR_TERM_PUT_FORWARD_CALL`, …). It emits an
+**EXPIRY** log line per ticker and nothing more — **entries/exits still trade the nearest expiry**;
+wiring expiry structure into the entry decision is a later, separately-gated step. The shadow scan
+uses cumulative (not fresh) volume as a coarse mass proxy, which is enough for share/control/migration
+direction. Data layer gains `get_scan_expiries()`; `get_nearest_expiry()` is unchanged. Tests:
+`test_expiry.py` (14 checks). *Default OFF — shadow, no entry impact.*
+
+**P4 — campaign archetypes (`analysis/archetype.py`).** The base engine over-rewards one shape,
+the compact 0DTE shock. Institutional commitment actually appears in several forms, and each has
+different expectations for how premium *should* behave. Every candidate is now classified into an
+archetype — **SHOCK_ACCUMULATION, PERSISTENT_ACCUMULATION, SELF_SUSTAINING_EXPANSION** (premium
+rising as volume fades — the AAPL case), **SHAKEOUT_AND_RECOVERY, STAIR_STEP_ACCUMULATION,
+IMPULSE_REPRICING, FORWARD_POSITIONING / CROSS_EXPIRY_ACCUMULATION** (from the P3 expiry scan),
+**DISTRIBUTION**, or UNCLASSIFIED — from features already computed (volume geometry, abnormality,
+response, self-sustainability, distribution probability). It is logged at entry (an **ARCHETYPE**
+line) and stored on the position. `ARCHETYPE_ENABLED` (default **true**) only computes + logs the
+label — it changes nothing. Applying archetype-specific *entry* expectations is reserved behind
+`ARCHETYPE_GATE_ENABLED` (default **false**) and not wired in yet. Tests: `test_archetype.py`
+(9 checks). *Classification is live-harmless; behavioural use is OFF.*
+
+**P5 — distributed strike-surface aggregation (`analysis/strikes.py`).** The base engine asks a
+*contract-selection* question ("which single strike dominates?") and can therefore miss a real
+ticker-level campaign spread across a ladder — the AMZN case, calls distributed over ~237.5…257.5
+with no single strike passing a dominant-strike test. This layer answers the **ticker-level**
+question first ("is capital concentrating in this side across the surface?") and only then names a
+representative contract (nearest the mass-weighted center). It computes surface measures —
+LadderMass, participation **breadth**, concentration (HHI), dispersion, weighted center, strike
+**momentum**, and a **breadth-adjusted strength** that *rewards* broad participation — and classifies
+the surface: SINGLE_STRIKE_DOMINANT, TWO_STRIKE_COORDINATED, ADJACENT_STRIKE_LADDER,
+**BROAD_SURFACE_ACCUMULATION** (the AMZN campaign — broad participation is not weak participation),
+DISTRIBUTED_BACKGROUND, THIN. `SURFACE_ENABLED` (default **true**) computes + logs a **SURFACE** line
+per entry; letting a broad-surface campaign qualify *without* a dominant strike is reserved behind
+`SURFACE_GATE_ENABLED` (default **false**). Tests: `test_strikes.py` (11 checks, incl. an explicit
+AMZN-ladder case). *Profile is live-harmless; behavioural use is OFF.*
+
+**P6 — campaign replay + candidate archive (`analysis/replay.py`).** Development cannot depend on
+hand-picked screenshots. With `RESEARCH_ARCHIVE_ENABLED=true` the engine appends a structured JSONL
+record (the §46 field set — attention/abnormality, chosen contract, accumulation/response/lifecycle,
+plus the new EAS/archetype/surface reads) for the top-K candidates every `RESEARCH_ARCHIVE_EVERY_S`,
+**and** a record at every entry (`ENTERED`/`REJECTED`) and exit (`EXIT` with P&L + hold time). That
+lets a campaign be reconstructed poll-by-poll and a **missed winner** turned into a reproducible
+diagnostic (`diagnose_missed`): did the ticker ever rank top-1/2/3, was accumulation ever present,
+which gate blocked it most, or was it genuinely invisible? All record-building is pure; the archive
+is a swallow-errors JSONL appender, so research logging can never disrupt the loop. Default **OFF** —
+when off, no record is built and nothing is written. Tests: `test_replay.py` (9 checks incl. an
+archive round-trip). *This is the layer that makes P1–P5/P7–P8 honestly validatable.*
+
+**P7 — profit-taking revalidation / runner + exit taxonomy.** The fixed +60% / +150% ladder
+mechanically forfeits the +300/+500/+1000% campaigns the engine exists to catch. With
+`RUNNER_ENABLED=true`, half is still banked at +TP1, but the rest becomes a **runner** held while
+the campaign is intact — exited only on coherent **distribution** (dist-prob ≥ exit), a **wide,
+expiry-aware trail** (arms past +100%, gives back 50% of peak, vs the base 40%/35%), an optional hard
+ceiling, control transfer, or EOD — instead of a hard +150% close. The **−40% hard stop stays a pure
+backstop.** Every exit is also tagged into a **taxonomy** (`campaign.exit_category`: OBJECTIVE /
+THESIS_DEATH / DISTRIBUTION / CONTROL_TRANSFER / RISK_STOP / EOD) and each position now tracks MFE
+**and MAE**, both written to the archive for by-archetype / by-DTE exit-quality analysis. Default
+**OFF** → the validated +60/+150 ladder is unchanged live. Tests: `test_exits.py` (16 checks).
+*Runner behaviour OFF pending backtest; taxonomy/MAE logging is live-harmless.*
+
+**P8 — honest probability calibration (`analysis/calibration.py`).** The engine gates on a
+"posterior" (`CAMPAIGN_MIN_POSTERIOR = 0.55`) and blends a continuation probability into EV. Calling
+that **Bayesian** is only honest if it is *calibrated* — so the terminology is corrected everywhere to
+a **heuristic posterior proxy (uncalibrated)**, and until proven, 0.55 is a heuristic knob, not a
+true 55%. The new module measures calibration from the P6 archive: **Brier score, log loss, a
+reliability curve + Expected Calibration Error, and a decile table** (predicted-probability decile →
+realized continuation rate), with `slice_reports` to check **stability by archetype / DTE / symbol**.
+`pairs_from_archive` builds (probability, outcome) pairs by matching each ENTERED record to its EXIT
+P&L; `python -m analysis.calibration` prints the report over the archive. Tests: `test_calibration.py`
+(13 checks). This is a *measurement* tool — it changes no trading behaviour; it tells us whether the
+proxy deserves to be trusted (and, per the deferred-research note, whether the heavier statistical
+machinery is yet justified).
+
+### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
+
+Real 1-min bars, SHADOW fills — a directional check, not live P&L.
+
+| Config (4 weeks) | Entries/day | Win% | Avg/trade | Worst | Profitable wks |
+|---|--:|--:|--:|--:|--:|
+| **All flags ON** (all gates + P1/P4/P5/P7) | 1.1 | 32% | +0.7% | −32% | 2/4 |
+| P1 + safe flags only (entry gates OFF) | 1.1 | 43% | +0.4% | −43% | 2/4 |
+
+**Neither config is a proven edge** — both ~breakeven, 2/4 weeks, with −30–40% tail weeks. The two
+are essentially a **wash**: the full gate stack trades some of the tuned week's upside (P1-alone hit
+win 55%/+10% on 07/20–24) for a smaller worst-case tail (−32% vs −43%) via the distribution veto.
+P1 (the premature-exit fix) is the one change with a clear in-sample win (07/20–24: win 36%→55%,
++5%→+10% vs baseline). **Calibration (P8)** over a backtest archive (14 matched pairs) gave Brier
+0.40 / ECE 0.37 / non-monotonic deciles → the posterior/continuation **proxy is NOT yet calibrated**
+(confirms the "uncalibrated proxy" terminology; the 0.55 threshold is not a true probability yet).
+The P6 archive → P8 calibration loop is proven end-to-end.
+
+**LIVE POSTURE 2026-08-03 (paper):** per request, **all behaviour-changing flags are ON** for a
+paper forward-test (STABILIZE, EARLY_DETECT, ARCHETYPE_GATE, SURFACE_GATE, RUNNER, all prior gates
+re-enabled, RESEARCH_ARCHIVE on; MULTI_EXPIRY kept OFF live — pure-shadow, adds API load for no
+trade benefit). This is **not** a claim the edge is proven — it is a data-gathering forward-test on
+simulated money; a −40% stop day is plausible. `RESEARCH_ARCHIVE_ENABLED` means tomorrow's real
+fills feed the P8 calibration harness. Roll back any flag in `.env` after reviewing the logs.
+
+**Follow-up P1 — campaign-based exits (`analysis/hold.py`).** Live sessions kept showing the same
+management flaw the spec calls out: healthy positions exited on *cooling* (TSLA +3% ROTATION, GOOGL
+4-min STATISTICAL_EXHAUSTION). This separates **holding** from **entering**. With
+`CAMPAIGN_CONFIDENCE_ENABLED=true`, each held wave carries a stateful **CampaignConfidence** (starts
+`CONF_INIT`=0.75): **rotation is a penalty, not a command** (§4/§6); verified deterioration (lost
+control, opposite-side strengthening, distribution, premium-not-progressing, higher-low failure) also
+subtracts; **reacceleration / an ACTIVE revival adds** — so a still-ACTIVE incumbent *resists* being
+rotated out, while genuine multi-signal decay erodes confidence below `HOLD_EXIT_THRESHOLD`=0.40 and
+exits with a **§20 label** (`VERIFIED_DISTRIBUTION`, `PERSISTENT_CONTROL_TRANSFER`,
+`ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE`, `PREMIUM_STRUCTURE_FAILURE`, `RESILIENCE_FAILURE`,
+`TRUE_MULTI_VARIABLE_EXHAUSTION`). Adds **FUNDED / SELF_SUSTAINING / REACCELERATING** lifecycle labels
+(§7) and premium-structure metrics — **PremiumPersistence / PremiumSmoothness / HigherLowQuality**
+(§15-16) — that recognise an orderly persistent build (AAPL) rather than only a violent shock. It
+supersedes the STABILIZE exit path when on. Tests: `test_hold.py` (13 checks). *Default OFF — pending
+backtest.* Remaining follow-up items (gate-stack refactor, local-value cheapness + latency diagnosis,
+persistent-accumulation entry scoring + opening rework, named campaign replays) are tracked separately.
+
+**Follow-up §10-19 — the rest of the v2 spec (all flag-gated / research; default OFF unless noted).**
+- **§19/§20 labels** — entries now return a specific rejection label (`MISSED_DUE_TO_DETECTION_LATENCY`,
+  `_SINGLE_STRIKE_NOTIONAL`, `_CLUSTER_AGGREGATION`, `_EV_GATE`, `ECONOMICALLY_VALID_REJECTION`, …)
+  archived per candidate; `campaign.reject_is_model_miss` separates a false-negative worth researching
+  from a disciplined reject. Exits use the §20 campaign labels.
+- **§10 archetype entry routes (`analysis/entry.py`, `ENTRY_ROUTES_ENABLED`)** — replaces the brittle
+  conjunctive gate stack with **hard vetoes + archetype-specific routes + a total expected-asymmetry
+  score**, so strong evidence in one dimension (e.g. a broad AMZN ladder's cluster notional, or an
+  AAPL build's persistence) can offset a weak reading in another. Fixes the "demands early pricing
+  AND late confirmation" contradiction.
+- **§11/§12 (`analysis/value.py`)** — CHASED is now split into `MISSED_DUE_TO_DETECTION_LATENCY`
+  (cheap when found, ran before we acted) vs `MISSED_DUE_TO_PRICE_EXTENSION` (valid); notional
+  shortfalls split single-strike vs cluster-aggregation; local-value cheapness + latency metrics.
+- **§15-17 (`archetype.quality_score`)** — an archetype-aware CampaignQualityScore (persistence-
+  weighted for persistent builds, acceleration-weighted for shocks, expiry for forward, post-volume
+  for self-sustaining), computed + logged. Premium persistence/smoothness/higher-low live in
+  `hold.py`. **§13 (`OPENING_QUALITY_ENABLED`)** waives the blanket 1.4× opening penalty for a clean
+  opening campaign.
+- **§18 campaign replay (`replay_campaign.py`)** — poll-by-poll reconstruction of any contract from
+  real bars. Ran the four named misses: **NVDA 200C +720%, TSLA 315C +417%, MSFT 490C +163%, AAPL
+  305C +131%** — each had a long *cheap window* before the move, confirming the misses were detection
+  latency, not invalid setups. Tests: `test_entry.py`, `test_value.py`, +hold/archetype checks.
+  **17 test files green.**
+
+---
+
+## Honest status — running ACTIVE on paper, edge NOT yet proven
+
+The engine is running **ACTIVE on the Alpaca PAPER account** (simulated money) as a forward-test
+with real fills. That is a *learning* step, **not** a statement that the edge is proven — because
+the multi-week backtest says it isn't:
+
+**4-week validation** (real 1-min option bars, 06/29–07/24), most recent week is the one thresholds
+were tuned on, the earlier three are out-of-sample:
+
+| Config | Entries/day | Profitable weeks | Overall avg/trade |
+|---|--:|--:|--:|
+| precision pass | 1.4 | **2 / 4** | +4% |
+| + campaign gate | 1.2 | **1 / 4** | −1.4% |
+
+Two out-of-sample weeks lost ~15–19%; the tuned week looks best (an overfitting signature). The
+campaign gate improved *precision* (fewer entries) but **hurt profit** — it cut winners as well as
+losers. So: frequency and discipline are good; a **robust, repeatable edge is not established.**
+
+**Event-shape-through-time layer (2026-07-29):** the DTE-sensitive timing, distribution-probability
+veto, expected-value gate, stricter FORMING entry and WATCH/REDUCE were added on top. First check on
+the (in-sample) 2026-07-20..24 week: **2.6 entries/day, win 31%, avg +4%, worst −15%** — it cut the
+worst-case tail (−24% → −15%) but *also* trimmed winners (win 44% → 31%, avg +12% → +4%) on that
+tuned week. The new probabilistic gates default to lenient/degrading values (the backtest carries
+no IV and a constant delta), so this is a directional check, **not** proof; the layer still needs a
+full multi-week, out-of-sample re-validation before it changes the live posture.
+
+Why paper-active anyway: the backtest's **1-minute granularity + synthesized bid/ask** may distort
+0DTE behavior enough to matter, and paper forward-testing replaces those with **real Alpaca fills,
+spreads, and quotes**. It costs nothing (simulated money) and produces honest live data to judge
+against. Every `config.py` threshold is still a **research parameter**, not proven truth.
+
+**Do not move to a real-money account** until several weeks are *consistently* positive on paper.
+
+**Deferred research (deliberately not built yet).** The research notes list heavier statistical
+machinery — **Hidden Markov Models, Kalman filtering, survival/hazard functions, kernel density
+estimation, online learning, fractal dimension, and historical time-of-day distribution matching.**
+These are *not* implemented: they need stored, labelled training history and add real complexity,
+and bolting them onto an engine whose base edge is not yet validated would add overfitting risk
+without a way to measure it. The current engine approximates their intent with lighter, testable
+pieces — robust Z/MAD (vs. KDE), the wave state machine (vs. a full HMM), the min-hold + refractory
+(vs. hazard/survival timing), and per-ticker adaptive baselines (vs. historical matching). Revisit
+once there is a stored campaign-outcome dataset to train and validate against.
+
+**Deployment:** the process **exits after the EOD flatten**, so the daily 08:10 scheduled launch
+always runs the latest on-disk code — no manual restart needed to deploy a change.
+
+**Google Sheets trade log (`output/sheets_logger.py`, ported from Jakevolume 2026-07-31).** Jakenew
+previously had **no** Sheets integration — which is why the shared "Trading Log" spreadsheet never
+updated with Jakenew's trades (only Jakevolume fed it). It now logs every **ENTRY / SCALE / EXIT** to
+a dedicated **`Jakenew_Trades`** tab in the *same* spreadsheet, reusing the *same* service-account
+credentials, so both engines share one workbook without colliding. Writes are async + throttled +
+429-retried in a daemon thread, so the ~5s loop is never blocked; a missing credential/spreadsheet
+logs a warning and the engine runs on without Sheets (never fatal). Enable with `SHEETS_ENABLED=true`.
+
+```
+Layer 1  analysis/mass.py  (+ analysis/flow.py)   which ticker  (mass, Z, EWMA, ranking, Δ-adj notional, IV series)
+Layer 2  analysis/control.py                       which side    (5-state control)
+Layer 3  analysis/waves.py                          the wave      (birth→death, one entry, DTE-sensitive windows, FAILED_FORMATION)
+Filter   analysis/response.py                       accumulation vs distribution (event shapes, response efficiency, distribution probability)
+Lifecycle analysis/lifecycle.py                      self-sustainability, windowed/delayed response, shakeout, continuation prob
+Verdict  analysis/campaign.py                        §14/§15 — campaign decision + posterior proxy (uncalibrated) + expected value
+Engine   engine.py + execution.py                   orchestration + orders + WATCH/REDUCE
+Backtest backtest.py [N weeks] [--quiet]            replay real option bars, multi-week validation
+```
+
+## Key knobs (`.env` / `config.py`, defaults shown)
+
+| Setting | Default | Meaning |
+|---|--:|---|
+| `WAVE_LEAD_SHARE` | 0.42 | leader must own this share of the pool |
+| `WAVE_LEAD_MARGIN` | 10 | …and lead rank-2 by this score margin, or sit out |
+| `WAVE_ACTIVE_Z` / `WAVE_IMMEDIATE_Z` | 3.0 / 4.0 | abnormality to reach ACTIVE |
+| `WAVE_MIN_HOLD_SECONDS` | 180 | protect a young wave from thesis-exits (unknown-DTE default; DTE-scaled otherwise) |
+| `DTE_TIMING_ENABLED` | true | scale confirm/min-hold/forming-window by days-to-expiry |
+| `WAVE_REFRACTORY_MIN` | 20 | bench a name this long after its wave ends |
+| `GATE_MIN_SYMBOL_PREMIUM` / `_EVENT_NOTIONAL` | 100k / 55k | premium floors |
+| `CHAIN_NOTIONAL_MULT` | 1.5 | chains face a higher notional floor than single strikes |
+| `GATE_MAX_DIST_FROM_LOW` | 1.50 | buy only within 1.5× the contract's session low |
+| `REQUIRE_ACCUMULATION` | true | reject distribution / negative-response events |
+| `CAMPAIGN_ENABLED` / `CAMPAIGN_MIN_SCORE` | true / 62 | the unified campaign gate (§14/§15) |
+| `CAMPAIGN_BAYES_ENABLED` / `CAMPAIGN_MIN_POSTERIOR` | true / 0.55 | Bayesian posterior gate on entry |
+| `DIST_PROB_ENABLED` / `DIST_PROB_MAX_ENTRY` | true / 0.60 | distribution-probability veto on entry |
+| `DIST_PROB_REDUCE` / `REDUCE_MIN_GIVEBACK` | 0.60 / 0.15 | WATCH/REDUCE trim thresholds |
+| `REQUIRE_POSITIVE_EV` / `EV_MIN` | true / 0.0 | expected-value entry gate |
+| `FORMING_MIN_POSTERIOR` / `FORMING_MAX_DIST_PROB` / `FORMING_MIN_EV` | 0.66 / 0.45 / 0.05 | stricter early (FORMING) entry |
+| `REQUIRE_IV_CONFIRM` / `DELTA_ADJ_NOTIONAL_MIN` | false / 0 | optional IV-firmness / directional-size gates (off) |
+| `TAKE_PROFIT_1/2_PCT` | +60% / +150% | scale / full profit targets |
+| `STOP_LOSS_PCT` | 0.40 | hard stop-loss (risk backstop) |
+| `ENTRY_CUTOFF_BUFFER_MIN` | 15 | no new entries within this many min of the flatten |
+| `FAST_POLL_SECONDS` | 5 | loop cadence |
+| `ALPACA_ENABLED` / `ALPACA_PAPER` | **true** / true | **ACTIVE on paper** (real orders, simulated money) |
+| `SHEETS_ENABLED` | **true** | log every entry/scale/exit to the Google Sheet (ported from Jakevolume) |
+| `GOOGLE_SPREADSHEET_ID` / `GOOGLE_SERVICE_ACCOUNT_FILE` | (shared) | same workbook + service account as Jakevolume; Jakenew writes only its `Jakenew_Trades` tab |
+| `STABILIZE_ENABLED` | **false** | P1: STABILIZING state + campaign memory (cooling ≠ death) — shadow |
+| `STABILIZE_MIN_CONTROL` / `_OPP_CONTROL` | 0.55 / 0.60 | side still controls / opposite side is a real threat |
+| `WAVE_STABILIZE_MAX_S` | 900 | max time a wave stays STABILIZING before fade-out counts as decay |
+| `ROTATION_REQUIRE_INCUMBENT_WEAK` | true | rotation exit needs the incumbent's own campaign fading too |
