@@ -40,12 +40,13 @@ def _clamp(x):
     return max(0.0, min(1.0, x))
 
 
-# Mature / exit / stale event shapes — a route must NEVER enter a campaign that is already being
-# unwound (the 2026-08-05 TSLA MATURE_DISTRIBUTION and META DISTRIBUTION-archetype route passes that
-# only the spread veto stopped). Route mode bypasses the soft accumulation/archetype gates, so these
-# have to be hard vetoes here.
+# Non-tradeable event shapes — a route must NEVER enter a campaign that is being unwound, has a
+# collapsing premium, or is a lone/late chase. Route mode bypasses the soft accumulation/shape gates,
+# so these have to be hard vetoes here. Expanded 2026-08-06 after route mode entered a GOOGL 362.5C
+# HEAVY_VOLUME_NEGATIVE_RESPONSE (premium being destroyed) and an AMZN ISOLATED_PRINT late-chase.
 _EXIT_SHAPES = {'MATURE_SCALING_ACTIVITY', 'DISTRIBUTION_AT_PREMIUM_HIGH',
-                'EXHAUSTION_OR_EXIT_FLOW', 'STALE_OPENING_VOLUME'}
+                'EXHAUSTION_OR_EXIT_FLOW', 'STALE_OPENING_VOLUME',
+                'HEAVY_VOLUME_NEGATIVE_RESPONSE', 'ISOLATED_PRINT'}
 
 
 def hard_veto(c: dict):
@@ -57,6 +58,8 @@ def hard_veto(c: dict):
         return 'ECONOMICALLY_VALID_REJECTION'                 # never route-enter a distribution campaign
     if c.get('shape') in _EXIT_SHAPES:
         return 'ECONOMICALLY_VALID_REJECTION'                 # mature / exit / stale event shape
+    if config.ACCEPTANCE_ENABLED and (c.get('acceptance') or {}).get('label') == 'REJECTION':
+        return 'ECONOMICALLY_VALID_REJECTION'                 # heavy volume but premium making lower lows
     if (c.get('dist_low', 1.0) or 1.0) > config.ENTRY_HARD_EXTENSION:
         return 'MISSED_DUE_TO_PRICE_EXTENSION'                # objectively-late extension
     return None
@@ -76,10 +79,16 @@ def evidence(c: dict, m: dict) -> dict:
     cheap = (_clamp(1.0 - (dist - 1.0) / max(config.GATE_MAX_DIST_FROM_LOW - 1.0, 1e-9)) if dist >= 1 else 1.0)
     persist = max(c.get('self_sust', 0.0) or 0.0, c.get('cont_prob', 0.0) or 0.0)
     rank_ev = (1.0 if rank == 1 else 0.6 if rank == 2 else 0.3 if rank == 3 else 0.1) * _clamp(share / 0.5)
+    # Response evidence: premium appreciation OR absorption (heavy volume + premium holding) — we do
+    # NOT require appreciation (that would make us late; the AMZN lesson).
+    resp_ev = _clamp(0.5 + (c.get('resp_event', 0.0) or 0.0) * 2.0)
+    acc = (c.get('acceptance') or {})
+    if acc.get('absorbing'):
+        resp_ev = max(resp_ev, acc.get('score', 0.0))
     return {'rank': _clamp(rank_ev),
             'notional': _clamp(eff_notional / (config.GATE_MIN_EVENT_NOTIONAL * 2.0)),
             'control': _clamp((ctrl - 0.5) * 2.0),
-            'response': _clamp(0.5 + (c.get('resp_event', 0.0) or 0.0) * 2.0),
+            'response': resp_ev,
             'abn': _clamp(z / 6.0),
             'persist': _clamp(persist),
             'cheap': cheap}

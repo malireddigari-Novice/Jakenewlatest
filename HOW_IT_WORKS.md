@@ -11,6 +11,28 @@ places **real orders with simulated money** (no real capital), a forward-test wi
 spreads. Set `ALPACA_ENABLED=false` to return to SHADOW (log only). Risk controls in force: 1%
 sizing, one position at a time, −40% hard stop, EOD flatten.
 
+> **Authoritative runtime status — `.env` wins, not this doc.** The knob tables below show code
+> DEFAULTS; the *actual* loaded values are printed at every launch as a `RUNTIME CONFIG` log line
+> (and `EXIT DECISION OWNER = …`). As of **2026-08-06** the live paper `.env` has ALL behavior flags
+> **ON**. Four distinct statuses are tracked separately per feature:
+>
+> | Feature | Implemented | Enabled (live .env) | Authoritative (owns a decision) | Validated (backtest/live edge) |
+> |---|:--:|:--:|:--:|:--:|
+> | CampaignConfidence hold-engine exits | ✅ | ✅ | ✅ **sole thesis-exit owner** (legacy rotation/exhaustion/control-transfer are superseded; WATCH/REDUCE gated off) | ⚠️ in-sample only |
+> | Daily one-ENTER-per-side lock | ✅ | ✅ | ✅ blocks re-entry all day | ❌ first live day 8/7 |
+> | Archetype entry routes (+ hard vetoes) | ✅ | ✅ | ✅ **replaces the conjunctive stack** for entries | ⚠️ 8/5 live, veto-fixed 8/6 |
+> | Premium Acceptance (absorption/rejection) | ✅ | ✅ | ✅ REJECTION vetoes / ABSORPTION lifts evidence (route mode) | ❌ |
+> | Reinforcement lifecycle notes | ✅ | ✅ | n/a (notification only) | n/a |
+> | Strike-surface / cluster in entries | ✅ | ✅ | ✅ via route cluster notional + SURFACE_GATE | ❌ |
+> | Runner profit-management | ✅ | ✅ | ✅ (post-TP1) | ❌ |
+> | Multi-expiration scan | ✅ | ✅ | ❌ shadow/log only (no entry impact) | n/a |
+> | T+1 OI confirmation | ✅ | ❌ | ❌ needs Schwab OI (off) | n/a |
+>
+> **Allowed exits that bypass the hold engine (by design):** hard stop, EOD flatten, overwhelming
+> opposite-side flip, and profit objective (TP/trail/runner). Everything else about staying-in vs
+> leaving is decided by CampaignConfidence, logged per-poll as `… HOLD conf=… (Δ… ctrl_ok=… dist=…)`
+> and, on exit, `decided_by=CAMPAIGN_CONFIDENCE`.
+
 ---
 
 ## The core idea
@@ -486,6 +508,26 @@ persistent-accumulation entry scoring + opening rework, named campaign replays) 
   305C +131%** — each had a long *cheap window* before the move, confirming the misses were detection
   latency, not invalid setups. Tests: `test_entry.py`, `test_value.py`, +hold/archetype checks.
   **17 test files green.**
+
+**New-spec — "campaign detector, not an intraday bot" (MSFT/GOOGL/AMZN lessons).** The exit half of
+this spec (rotation ≠ invalidation, campaign persistence, P&L ≠ campaign state, reinforcement-not-
+re-entry) was already delivered by FU-P1 (CampaignConfidence). The new entry/alerting pieces:
+- **Daily one-ENTER-per-side lock (`DAILY_ENTRY_LOCK_ENABLED`, default OFF).** Max one CALL + one PUT
+  entry per ticker per session; a fired entry consumes that slot for the whole day — **no re-entry
+  that side/ticker even after an exit/invalidation** (kills the ENTER→EXIT→ENTER churn). "The scanner
+  gets unlimited observations; the trader gets extremely few decisions."
+- **Premium Acceptance (`analysis/flow_response.py`, `ACCEPTANCE_ENABLED`, default ON).** High call
+  volume ≠ bullish. Distinguishes **ABSORPTION** (heavy volume + premium *holding* — tradeable even
+  flat) from **REJECTION** (heavy volume + premium making *lower lows* — the GOOGL 362.5C that was
+  being destroyed). Wired into the entry routes: REJECTION is a hard veto; ABSORPTION lifts response
+  evidence **without requiring appreciation** (so we're not late — the AMZN lesson).
+- **Reinforcement lifecycle updates (`REINFORCE_LOG_ENABLED`, default ON).** Same-side flow resurging
+  on a held position posts **CAMPAIGN STRENGTHENING** (a lifecycle note, throttled) instead of a new
+  ENTER — the AMZN 12:04 $1.44M second wave is reinforcement, not a new trade.
+- **T+1 OI confirmation (`analysis/oi_confirm.py`, `OI_CONFIRM_ENABLED`, default OFF).** Stores each
+  campaign's fingerprint and a next-day classifier (NEW_POSITION_CONFIRMED / PARTIALLY / LIKELY_
+  CLOSING_CHURN / INCONCLUSIVE) — whether today's volume became real open interest. Needs Schwab OI
+  (currently off). Tests: `test_newspec.py` (14 checks). **18 test files green.**
 
 ---
 

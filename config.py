@@ -700,6 +700,10 @@ HS_W_OPP      = float(os.getenv('HS_W_OPP', '0.15'))
 # ═══════════════════════════════════════════════════════════════════════════════
 ENTRY_ROUTES_ENABLED  = os.getenv('ENTRY_ROUTES_ENABLED', 'false').lower() == 'true'
 ENTRY_ROUTE_MIN_SCORE = float(os.getenv('ENTRY_ROUTE_MIN_SCORE', '0.55'))  # total-asymmetry pass bar
+# Rank relaxation (MSFT 495C false-negative): under routes, absolute campaign quality can qualify a
+# non-leader — the wave engine proposes candidates up to this attention rank and lets the route's
+# asymmetry score + hard vetoes decide, instead of requiring strict Mag-7 rank #1 + lead margin.
+ROUTE_MAX_RANK        = int(os.getenv('ROUTE_MAX_RANK', '3'))
 ENTRY_HARD_DIST       = float(os.getenv('ENTRY_HARD_DIST', '0.80'))        # dist-prob above = hard distribution veto
 ENTRY_HARD_EXTENSION  = float(os.getenv('ENTRY_HARD_EXTENSION', '2.5'))    # dist-from-low above = objectively-late veto
 
@@ -715,6 +719,26 @@ CHEAP_LOCAL_VALUE_ENABLED = os.getenv('CHEAP_LOCAL_VALUE_ENABLED', 'false').lowe
 # §13 — waive the blanket opening 1.4× penalty for a clean opening campaign (persists beyond the
 # auction / positive short response / adjacent-strike confirmation). Default OFF.
 OPENING_QUALITY_ENABLED   = os.getenv('OPENING_QUALITY_ENABLED', 'false').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW-SPEC — DAILY ONE-ENTER-PER-SIDE LOCK + PREMIUM ACCEPTANCE + REINFORCEMENT
+# "The scanner gets unlimited observations; the trader gets extremely few decisions." A fired entry
+# CONSUMES that (ticker, side) slot for the whole session — no re-entry that side/ticker today even
+# after an exit/invalidation (kills the ENTER→EXIT→ENTER churn). Everything after entry is campaign
+# management (STRENGTHENING/HOLD/INVALIDATED), not a new alert. Flag-gated, default OFF.
+# ═══════════════════════════════════════════════════════════════════════════════
+DAILY_ENTRY_LOCK_ENABLED = os.getenv('DAILY_ENTRY_LOCK_ENABLED', 'false').lower() == 'true'
+# Premium Acceptance (GOOGL §): heavy volume + premium HOLDING = absorption (tradeable, even flat);
+# heavy volume + premium lower-lows = rejection (WATCH only, not ENTER). Never requires appreciation.
+ACCEPTANCE_ENABLED     = os.getenv('ACCEPTANCE_ENABLED', 'true').lower() == 'true'  # compute+log
+ACCEPTANCE_HEAVY_MULT  = float(os.getenv('ACCEPTANCE_HEAVY_MULT', '2.0'))  # recent vol ≥ this × mean = heavy
+ACCEPTANCE_REJECT_DROP = float(os.getenv('ACCEPTANCE_REJECT_DROP', '0.05'))# recent low ≥5% below prior lows = rejection
+# Reinforcement: same-side resurgence on a held position logs STRENGTHENING (not a new ENTER).
+REINFORCE_LOG_ENABLED     = os.getenv('REINFORCE_LOG_ENABLED', 'true').lower() == 'true'
+REINFORCE_MIN_INTERVAL_S  = float(os.getenv('REINFORCE_MIN_INTERVAL_S', '300'))  # throttle strengthening notices
+# T+1 OI campaign confirmation (research): needs Schwab OI (currently off) to fetch next-day OI.
+OI_CONFIRM_ENABLED        = os.getenv('OI_CONFIRM_ENABLED', 'false').lower() == 'true'
+OI_CONFIRM_FILE           = os.getenv('OI_CONFIRM_FILE', 'jakenew_campaigns.jsonl')
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')

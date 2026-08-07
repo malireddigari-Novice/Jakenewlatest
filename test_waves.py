@@ -215,5 +215,20 @@ eas_bad = campaign.early_accumulation_score(
 ck("EAS rewards early/cheap/responding over chased/distributing",
    0 <= eas_good <= 100 and eas_good > eas_bad)
 
+# ── MSFT rank-1 relaxation under ENTRY_ROUTES (non-leader can qualify) ─────────
+print("── rank relaxation (routes) ──")
+config.STABILIZE_ENABLED = False
+config.CAMPAIGN_CONFIDENCE_ENABLED = False
+config.ENTRY_ROUTES_ENABLED = False
+wr = WaveEngine(); wr.new_session()
+strong2 = lambda: metric('MSFT', share=0.45, z=4.5, ctrl=0.8, rank=2, score=90)
+off = wr.evaluate([strong2()], {'MSFT': strong2()}, set(), 15000.0)
+ck("rank-2 campaign is NOT proposed with routes OFF (strict rank-1 discipline)", len(off['enter']) == 0)
+config.ENTRY_ROUTES_ENABLED = True
+wr2 = WaveEngine(); wr2.new_session()
+on = wr2.evaluate([strong2()], {'MSFT': strong2()}, set(), 16000.0)
+ck("rank-2 strong campaign IS proposed with routes ON (MSFT 495C fix)", len(on['enter']) == 1)
+config.ENTRY_ROUTES_ENABLED = False
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

@@ -208,6 +208,29 @@ def exit_category(reason: str) -> str:
     return _EXIT_CATEGORY.get(reason, 'OTHER')
 
 
+# Which decision path OWNED the exit (for precedence auditing — was it the new hold engine or a
+# legacy/structural rule?). The confidence hold-engine labels are §20; legacy wave labels are the
+# old rotation/exhaustion/control-transfer; the rest are risk/objective/EOD/overwhelming.
+_CONFIDENCE_EXITS = {'VERIFIED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER',
+                     'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED', 'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE',
+                     'PREMIUM_STRUCTURE_FAILURE', 'RESILIENCE_FAILURE', 'TRUE_MULTI_VARIABLE_EXHAUSTION'}
+_LEGACY_EXITS = {'ROTATION', 'STATISTICAL_EXHAUSTION', 'CONTROL_TRANSFER'}
+
+
+def decision_path(reason: str) -> str:
+    if reason in _CONFIDENCE_EXITS:
+        return 'CAMPAIGN_CONFIDENCE'
+    if reason in _LEGACY_EXITS:
+        return 'LEGACY_WAVE'
+    if reason == 'CONTROL_FLIP_OVERWHELMING':
+        return 'OVERWHELMING_FLIP'
+    if reason == 'STOP_LOSS':
+        return 'RISK_STOP'
+    if reason == 'EOD_FLATTEN':
+        return 'EOD'
+    return 'STRUCTURAL_OBJECTIVE'
+
+
 # Rejection taxonomy (follow-up §19) — WHY an entry candidate did not become a trade. Distinguishes
 # a disciplined/valid rejection from a model failure worth researching as a false negative.
 _VALID_REJECTS = {'ECONOMICALLY_VALID_REJECTION', 'DATA_QUALITY_REJECTION', 'MISSED_DUE_TO_CAPACITY'}

@@ -74,6 +74,29 @@ def _setup_logging() -> None:
     )
 
 
+_BEHAVIOR_FLAGS = [
+    'ALPACA_ENABLED', 'ALPACA_PAPER', 'CAMPAIGN_CONFIDENCE_ENABLED', 'STABILIZE_ENABLED',
+    'DAILY_ENTRY_LOCK_ENABLED', 'ENTRY_ROUTES_ENABLED', 'ENTRY_ROUTE_MIN_SCORE',
+    'ACCEPTANCE_ENABLED', 'OPENING_QUALITY_ENABLED', 'ARCHETYPE_GATE_ENABLED', 'SURFACE_GATE_ENABLED',
+    'RUNNER_ENABLED', 'REINFORCE_LOG_ENABLED', 'RESEARCH_ARCHIVE_ENABLED', 'MULTI_EXPIRY_ENABLED',
+    'ROTATION_REQUIRE_INCUMBENT_WEAK', 'REQUIRE_POSITIVE_EV', 'CAMPAIGN_MIN_POSTERIOR',
+    'DIST_PROB_MAX_ENTRY', 'REDUCE_ON_DISTRIBUTION', 'HOLD_EXIT_THRESHOLD', 'SHEETS_ENABLED',
+]
+
+
+def _log_config() -> None:
+    """Print the ACTUAL resolved runtime config every launch — never rely on documented defaults.
+    The 'decision owner' is whichever exit path is authoritative given these flags."""
+    log = logging.getLogger('main')
+    vals = "  ".join(f"{f}={getattr(config, f)}" for f in _BEHAVIOR_FLAGS)
+    log.info("RUNTIME CONFIG | %s", vals)
+    owner = ("CAMPAIGN_CONFIDENCE (hold engine)" if config.CAMPAIGN_CONFIDENCE_ENABLED
+             else "STABILIZE" if config.STABILIZE_ENABLED else "LEGACY wave exits")
+    log.info("EXIT DECISION OWNER = %s | entry path = %s | daily one-per-side lock = %s", owner,
+             "ARCHETYPE ROUTES" if config.ENTRY_ROUTES_ENABLED else "conjunctive gate stack",
+             "ON" if config.DAILY_ENTRY_LOCK_ENABLED else "OFF")
+
+
 def _build_engine() -> AttentionEngine:
     log = logging.getLogger('main')
 
@@ -109,6 +132,7 @@ def _build_engine() -> AttentionEngine:
 def main() -> None:
     _setup_logging()
     _keep_awake()                         # block sleep for the duration of the session
+    _log_config()                         # print the actual resolved runtime config + decision owner
     log = logging.getLogger('main')
     engine = _build_engine()
 

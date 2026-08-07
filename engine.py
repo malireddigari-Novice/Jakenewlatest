@@ -27,9 +27,11 @@ from analysis import campaign
 from analysis import entry
 from analysis import events as ev
 from analysis import expiry
+from analysis import flow_response
 from analysis import hold
 from analysis import lifecycle as lc
 from analysis import mass
+from analysis import oi_confirm
 from analysis import replay
 from analysis import response as resp
 from analysis import strikes as strikesurf
@@ -107,6 +109,7 @@ class AttentionEngine:
             self._fwd_share.clear()
             self._expiry_class.clear()
             self._surf_center.clear()
+            self.state['entered_today'] = []       # NS: daily one-ENTER-per-side slots reset each session
             self.state['day'] = today.isoformat()
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
@@ -288,12 +291,24 @@ class AttentionEngine:
                             len(res['enter']), config.ENTRY_CUTOFF_BUFFER_MIN)
         else:
             for en in res['enter']:
+                slot = f"{en['ticker']}|{en['side']}"
+                # NS daily lock: one ENTER per side per ticker per session. A used slot blocks any
+                # re-entry that side/ticker today (even after an exit) — everything else is management.
+                if config.DAILY_ENTRY_LOCK_ENABLED and slot in self.state.get('entered_today', []):
+                    logger.info("ENTRY-SUPPRESSED %s %s — daily %s slot already used this session "
+                                "(campaign management only, no re-entry)",
+                                en['ticker'], en['side'], en['side'])
+                    continue
                 rej = self._open_wave(en, cand, ranked, market_mass, now)   # None on entry; §19 label on reject
+                if rej is None and config.DAILY_ENTRY_LOCK_ENABLED:
+                    self.state.setdefault('entered_today', []).append(slot)
                 if config.RESEARCH_ARCHIVE_ENABLED:
                     self.archive.write(replay.candidate_record(
                         now, en['ticker'], en['side'], metrics_by.get(en['ticker']),
                         cand.get(en['ticker']), en['wave'].state,
                         'ENTERED' if rej is None else 'REJECTED', rej))
+        if config.REINFORCE_LOG_ENABLED:
+            self._log_reinforcement(metrics_by, now)
         if config.RESEARCH_ARCHIVE_ENABLED:
             self._archive_snapshot(ranked, metrics_by, cand, now)
         state.save(self.state)
@@ -430,6 +445,9 @@ class AttentionEngine:
                     }
                     # Phase 2: EarlyAccumulationScore (research; logged, never gates alone).
                     cand[sym]['eas'] = campaign.early_accumulation_score(metrics[sym], cand[sym])
+                    # New-spec: Premium Acceptance — absorption vs rejection under heavy volume.
+                    if config.ACCEPTANCE_ENABLED:
+                        cand[sym]['acceptance'] = flow_response.premium_acceptance(minute_vols, marks)
                     # Phase 5: strike-surface profile (ticker-level campaign first; research/log).
                     if config.SURFACE_ENABLED:
                         sm = masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']
@@ -503,6 +521,36 @@ class AttentionEngine:
             except Exception:
                 logger.warning("%s: expiry scan failed", sym, exc_info=True)
 
+    # ── New-spec: reinforcement lifecycle updates (not new entries) ───────────────
+    def _log_reinforcement(self, metrics_by, now) -> None:
+        """Same-side concentrated flow resurging on a HELD position is REINFORCEMENT, not a new
+        trade (the AMZN 12:04 $1.44M second wave). Log/notify STRENGTHENING, throttled — the daily
+        lock already prevents a re-ENTER; this makes the 'one alert + lifecycle updates' model real."""
+        for pos in self._held():
+            m = metrics_by.get(pos['symbol'])
+            if not m or m.get('dominant_side') != pos['side']:
+                continue
+            ctrl = m['call_control'] if pos['side'] == 'CALL' else m['put_control']
+            strong = (m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z and ctrl >= config.WAVE_ACTIVE_CONTROL
+                      and m.get('velocity', 0.0) > 0)
+            last = pos.get('last_reinforce_ts')
+            due = True
+            if last:
+                try:
+                    due = (now - datetime.fromisoformat(last)).total_seconds() >= config.REINFORCE_MIN_INTERVAL_S
+                except Exception:
+                    due = True
+            if strong and due:
+                pos['last_reinforce_ts'] = now.isoformat()
+                logger.info("CAMPAIGN STRENGTHENING %s %s — same-side flow reinforcing "
+                            "(z=%.1f ctrl=%.2f share=%.0f%%) — HOLD, not a new entry",
+                            pos['symbol'], pos['side'], m['mass_z'], ctrl, 100 * m.get('attention_share', 0.0))
+                try:
+                    notify.send(f"🟢 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
+                                f"(same-side flow reinforcing; HOLD, not a new entry)")
+                except Exception:
+                    pass
+
     # ── Phase 6: candidate archive / campaign replay (throttled, JSONL) ───────────
     def _archive_snapshot(self, ranked, metrics_by, cand, now) -> None:
         """Every RESEARCH_ARCHIVE_EVERY_S, append a poll-by-poll record for the top-K ranked
@@ -551,10 +599,12 @@ class AttentionEngine:
                 self._close(pos, mark, now, reason='STOP_LOSS', board=board,
                             metric=metrics_by.get(pos['symbol']))
                 continue
-            # WATCH/REDUCE — deterioration-driven partial exit (distinct from a profit scale-out):
-            # the distribution probability has risen and the premium is giving back from its peak,
-            # but the wave thesis is not yet dead. Trim once to de-risk while the campaign resolves.
-            if (config.REDUCE_ON_DISTRIBUTION and not pos.get('tp1_done') and not pos.get('reduced')):
+            # WATCH/REDUCE — deterioration-driven partial exit. When the CampaignConfidence hold
+            # engine is authoritative it OWNS deterioration (distribution feeds its dist_high penalty),
+            # so this independent legacy trim is disabled — the hold engine is the single decision
+            # owner except for hard stop / EOD / overwhelming flip / profit objective (spec §4).
+            if (config.REDUCE_ON_DISTRIBUTION and not config.CAMPAIGN_CONFIDENCE_ENABLED
+                    and not pos.get('tp1_done') and not pos.get('reduced')):
                 giveback = max(0.0, peak - pnl)
                 dp = self._position_dist_prob(pos, mark, metrics_by.get(pos['symbol']), now, giveback)
                 if dp >= config.DIST_PROB_REDUCE and giveback >= config.REDUCE_MIN_GIVEBACK:
@@ -790,6 +840,7 @@ class AttentionEngine:
             'archetype': (c.get('archetype') or {}).get('archetype'),
             'surface_class': (c.get('surface') or {}).get('classification'),
             'quality': c.get('quality'),
+            'acceptance': (c.get('acceptance') or {}).get('label'),
             'entry_score': m['attention_score'], 'entry_z': m['mass_z'],
             'entry_share': m['attention_share'], 'entry_rank': m['rank'],
             'entry_control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
@@ -820,12 +871,24 @@ class AttentionEngine:
             logger.info("  SURFACE %s %s = %s (breadth=%d top=%.0f%% center=%s rep=%s)", sym, side,
                         surf['classification'], surf['breadth'], 100 * surf['top_share'],
                         surf['weighted_center'], surf['representative_strike'])
+        acc = c.get('acceptance')
+        if config.ACCEPTANCE_ENABLED and acc:
+            logger.info("  FLOW %s %s premium-acceptance=%s (score=%.2f)", sym, side,
+                        acc['label'], acc['score'])
         notify.entry_card(self._board_ctx(ranked, market_mass), symbol=sym, side=side,
                           strike=best['strike'], expiry=expiry.isoformat(), qty=qty, price=limit,
                           row=self._board_ctx(ranked, market_mass)['by_symbol'][sym], spot=spot,
                           mode=mode, now=now)
         pos = self._held()[-1]
         self._sheet(lambda: self.sheets.log_trade_entry(pos, mode=mode))
+        if config.OI_CONFIRM_ENABLED:      # store campaign fingerprint for T+1 OI confirmation
+            surf = c.get('surface') or {}
+            oi_confirm.record_campaign(config.OI_CONFIRM_FILE, {
+                'date': now.date().isoformat(), 'symbol': sym, 'side': side, 'strike': best['strike'],
+                'cluster_center': surf.get('weighted_center'), 'cluster_breadth': surf.get('breadth'),
+                'today_volume': best.get('fresh_vol'), 'fresh_premium': c['notional'],
+                'control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
+                'prior_oi': None})         # prior/next-day OI filled from Schwab when OI is enabled
 
     # ── position close/scale ─────────────────────────────────────────────────────
 
@@ -863,7 +926,8 @@ class AttentionEngine:
             self.archive.write(replay.candidate_record(
                 now, pos['symbol'], pos['side'], metric, None, w.state if w else None,
                 'EXIT', reason, extra={'pnl': round(pnl, 4), 'hold_s': hold_s,
-                                       'exit_category': category,
+                                       'exit_category': category, 'decided_by': campaign.decision_path(reason),
+                                       'confidence': (w.confidence if w else None),
                                        'mfe': mfe, 'mae': mae, 'entry_price': entry, 'exit_price': mark,
                                        'wave_id': pos.get('wave_id'), 'archetype': pos.get('archetype')}))
         mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
@@ -877,10 +941,10 @@ class AttentionEngine:
         if pos in self._held():
             self._held().remove(pos)
         mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
-        logger.info("[%s] EXIT %s %s x%d @ $%.2f (%s %s%.0f%%)  wave=%s  CAMPAIGN ENDED: %s",
+        logger.info("[%s] EXIT %s %s x%d @ $%.2f (%s %s%.0f%%)  wave=%s  decided_by=%s  CAMPAIGN ENDED: %s",
                     mode, pos['symbol'], pos['side'], pos['qty'], mark, reason,
                     '+' if pnl >= 0 else '', 100 * pnl, pos.get('wave_id'),
-                    campaign.campaign_end(reason))
+                    campaign.decision_path(reason), campaign.campaign_end(reason))
         notify.exit_card(pos, price=mark, reason=reason, pnl=pnl, mode=mode,
                          board=board if board is not None else {}, now=now)
         state.save(self.state)

@@ -35,6 +35,10 @@ ck("a DISTRIBUTION archetype is a hard veto (never route-enter distribution)",
    entry.hard_veto(cand(arch='DISTRIBUTION')) == 'ECONOMICALLY_VALID_REJECTION')
 ck("a mature/exit event shape is a hard veto",
    entry.hard_veto({**cand(), 'shape': 'MATURE_SCALING_ACTIVITY'}) == 'ECONOMICALLY_VALID_REJECTION')
+ck("HEAVY_VOLUME_NEGATIVE_RESPONSE is a hard veto (the GOOGL 362.5C case)",
+   entry.hard_veto({**cand(), 'shape': 'HEAVY_VOLUME_NEGATIVE_RESPONSE'}) == 'ECONOMICALLY_VALID_REJECTION')
+ck("ISOLATED_PRINT is a hard veto (lone/late chase)",
+   entry.hard_veto({**cand(), 'shape': 'ISOLATED_PRINT'}) == 'ECONOMICALLY_VALID_REJECTION')
 ck("decide() refuses a DISTRIBUTION archetype even at high asymmetry",
    not entry.decide(cand(arch='DISTRIBUTION'), m())['pass'])
 

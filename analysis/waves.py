@@ -294,13 +294,19 @@ class WaveEngine:
                 # incumbent still holding and not rotating out → challenger must wait (hysteresis)
                 if held and t not in exiting and not (rot and rot['ticker'] == t and rot['confirmed']):
                     continue
-                if m['rank'] != 1 or not self._lead_ok(m):
-                    continue
-                # Dominance: the leader must clear rank-2 by a margin (else the pool is contested
-                # and the engine sits out — spec §18 'occasionally no qualifying trades').
-                margin = m['attention_score'] - (ranked[1]['attention_score'] if len(ranked) > 1 else 0.0)
-                if margin < config.WAVE_LEAD_MARGIN:
-                    continue
+                # Rank/lead requirement. Under ENTRY_ROUTES, absolute campaign quality can qualify a
+                # NON-leader (the MSFT 495C false-negative): propose any top-ROUTE_MAX_RANK candidate
+                # and let _open_wave's route asymmetry score + hard vetoes be the real gate. Otherwise
+                # keep the strict rank-1 + lead-margin discipline (spec §18: sit out a contested pool).
+                if config.ENTRY_ROUTES_ENABLED:
+                    if m['rank'] > config.ROUTE_MAX_RANK:
+                        continue
+                else:
+                    if m['rank'] != 1 or not self._lead_ok(m):
+                        continue
+                    margin = m['attention_score'] - (ranked[1]['attention_score'] if len(ranked) > 1 else 0.0)
+                    if margin < config.WAVE_LEAD_MARGIN:
+                        continue
                 if self._in_refractory((t, side), m, now):
                     continue
                 # Proposed — the engine sets entry_issued only after the §16 contract gates pass,
@@ -397,10 +403,19 @@ class WaveEngine:
                            and m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z
                            and self._side_vel(m, side) > 0)
         rotation_active = bool(rot and rot.get('ticker') != t and rot.get('watched'))
+        prev = w.confidence
         new_conf, dominant = hold.confidence_step(w.confidence, f, rotation_active)
         w.confidence = new_conf
         self._label_hold_state(w, f, log)
+        # Per-poll confidence trajectory (spec: log confidence every poll + the active penalty/reward)
+        # so every hold/exit is reconstructable from the log/archive.
+        log.append(f"{w.wave_id} HOLD conf={new_conf:.2f} (Δ{new_conf - prev:+.2f} rot={int(rotation_active)} "
+                   f"ctrl_ok={int(f.get('control_ok', True))} opp={int(bool(f.get('opp_strong')))} "
+                   f"dist={int(bool(f.get('dist_high')))} prem={int(f.get('progressing', True))} "
+                   f"hl={int(f.get('higher_low', True))} active={int(bool(f.get('active')))})")
         if new_conf < config.HOLD_EXIT_THRESHOLD:
+            log.append(f"{w.wave_id} CONFIDENCE-EXIT conf={new_conf:.2f}<{config.HOLD_EXIT_THRESHOLD} "
+                       f"cause={dominant}")
             return hold.exit_reason_from(dominant, f)
         return None
 
