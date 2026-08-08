@@ -178,6 +178,7 @@ _END = {
     'PREMIUM_STRUCTURE_FAILURE':           'thesis dead — premium structure broke',
     'RESILIENCE_FAILURE':                  'thesis dead — campaign resilience collapsed',
     'TRUE_MULTI_VARIABLE_EXHAUSTION':      'thesis dead — genuine multi-variable exhaustion',
+    'REVERSAL_ACTIVATED':                  'reversed — a confirmed opposite-side campaign took over',
 }
 
 
@@ -197,6 +198,7 @@ _EXIT_CATEGORY = {
     'VERIFIED_DISTRIBUTION': 'DISTRIBUTION',
     'PERSISTENT_CONTROL_TRANSFER': 'CONTROL_TRANSFER',
     'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED': 'CONTROL_TRANSFER',
+    'REVERSAL_ACTIVATED': 'REVERSAL',
     'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE': 'THESIS_DEATH',
     'PREMIUM_STRUCTURE_FAILURE': 'THESIS_DEATH',
     'RESILIENCE_FAILURE': 'THESIS_DEATH',
@@ -218,6 +220,8 @@ _LEGACY_EXITS = {'ROTATION', 'STATISTICAL_EXHAUSTION', 'CONTROL_TRANSFER'}
 
 
 def decision_path(reason: str) -> str:
+    if reason == 'REVERSAL_ACTIVATED':
+        return 'REVERSAL_CLUSTER'
     if reason in _CONFIDENCE_EXITS:
         return 'CAMPAIGN_CONFIDENCE'
     if reason in _LEGACY_EXITS:

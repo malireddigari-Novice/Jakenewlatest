@@ -35,6 +35,7 @@ from analysis import mass
 from analysis import oi_confirm
 from analysis import replay
 from analysis import response as resp
+from analysis import reversal
 from analysis import strikes as strikesurf
 from analysis import value as valuemod
 from analysis.flow import FlowTracker
@@ -115,6 +116,7 @@ class AttentionEngine:
             self._expiry_class.clear()
             self._surf_center.clear()
             self.state['entered_today'] = []       # NS: daily one-ENTER-per-side slots reset each session
+            self.state['reversal'] = {}            # P3: reversal clusters are intraday — reset each session
             # P1: carry surviving campaigns forward as inherited/overnight memory (prune expired),
             # instead of waking up fresh. The intraday microstructure above is correctly reset; the
             # campaign MEMORY persists so the engine manages yesterday's still-alive theses first.
@@ -220,7 +222,11 @@ class AttentionEngine:
         opp_ctrl = m['put_control'] if side == 'CALL' else m['call_control']
         opp_acc = m['put_acceleration'] if side == 'CALL' else m['call_acceleration']
         control_ok = control >= config.STABILIZE_MIN_CONTROL
-        opp_strong = opp_ctrl >= config.STABILIZE_OPP_CONTROL and opp_acc > 0
+        # When the P3 reversal cluster is active it OWNS the opposite side — so CampaignConfidence
+        # stops exiting on raw opposite strength and only reacts to OWN-side deterioration; the staged
+        # reversal machine decides whether opposite flow actually invalidates/reverses the campaign.
+        opp_strong = (opp_ctrl >= config.STABILIZE_OPP_CONTROL and opp_acc > 0
+                      and not config.REVERSAL_ENABLED)
         higher_low = True
         self_sustaining = False
         if c:
@@ -282,8 +288,11 @@ class AttentionEngine:
         if config.MULTI_EXPIRY_ENABLED:
             self._maybe_scan_expiries(now)
 
-        # 1) structural TP/trail first (may free the wave/slot), then wave-driven exits/entries.
+        # 1) structural TP/trail first (may free the wave/slot), then reversal management (P3, owns
+        #    opposite-side exits), then wave-driven exits/entries.
         self._manage_structural(now, metrics_by, ranked, market_mass)
+        if config.REVERSAL_ENABLED:
+            self._manage_reversal(metrics_by, now)
         held = {(p['symbol'], p['side']) for p in self._held()}
         today = today_cst()
         dte_by = {s: (self._expiry[s] - today).days for s in measured if self._expiry.get(s)}
@@ -662,6 +671,49 @@ class AttentionEngine:
             if peak >= config.TRAIL_ARM_PCT and pnl <= peak - config.TRAIL_GIVEBACK_PCT:
                 self._close(pos, mark, now, reason='TRAIL_GIVEBACK', board=board,
                             metric=metrics_by.get(pos['symbol']))
+
+    # ── P3: stateful opposite-side reversal management (owns opposite-side exits) ──
+    def _manage_reversal(self, metrics_by, now) -> None:
+        """Escalate a per-held-position ReversalCluster from opposite-side evidence; at
+        REVERSAL_ACTIVATED, EXIT_FLAT (invalidate) or EXIT_REVERSE (invalidate + let the opposite
+        side enter). A single opposite print never flips the position (§11-15, safeguard #10)."""
+        rev = self.state.setdefault('reversal', {})
+        for pos in list(self._held()):
+            sym, side = pos['symbol'], pos['side']
+            m = metrics_by.get(sym)
+            if not m:
+                continue
+            opp = 'PUT' if side == 'CALL' else 'CALL'
+            oc = opp.lower()
+            opp_q = m.get(oc) or {}
+            entry = pos.get('entry_price') or 0.0
+            mark = self._current_mark(pos) or entry
+            pnl = (mark - entry) / entry if entry else 0.0
+            ev = {'opp_abnormal': m.get(oc + '_z', 0.0) >= config.REV_OPP_Z,
+                  'opp_control': m.get(oc + '_control', 0.0),
+                  'opp_premium_accept': m.get(oc + '_acceleration', 0.0) > 0,
+                  'cross_strike': (opp_q.get('n_active', 0) >= 2 or 'CHAIN' in (opp_q.get('class') or '')),
+                  'incumbent_progress_fail': pnl < 0,
+                  'opp_strike': opp_q.get('top_strike')}
+            key = f"{sym}|{side}"
+            cl = rev.get(key) or reversal.new_cluster(sym, side)
+            prev = cl['state']
+            cl = reversal.update(cl, ev, now)
+            rev[key] = cl
+            if cl['state'] != prev:
+                logger.info("REVERSAL %s %s->%s (opp=%s events=%d strikes=%s)", key, prev,
+                            cl['state'], opp, cl['events'], cl['strikes'])
+            opp_slot = f"{sym}|{opp}"
+            opp_qualifies = (opp_slot not in self.state.get('entered_today', [])
+                             and ev['opp_control'] >= config.REV_ACTIVATE_CONTROL)
+            out = reversal.outcome(cl, opp_qualifies)
+            if out != 'HOLD':
+                logger.info("REVERSAL %s %s → %s (opp %s qualifies=%s)", key, cl['state'], out,
+                            opp, opp_qualifies)
+                self._close(pos, mark, now, reason='REVERSAL_ACTIVATED', metric=m)
+                rev.pop(key, None)
+                if out == 'EXIT_FLAT':      # invalidate but do NOT reverse — block the opposite slot today
+                    self.state.setdefault('entered_today', []).append(opp_slot)
 
     # ── entries (Route: new ACTIVE wave, §16 contract gates) ──────────────────────
 

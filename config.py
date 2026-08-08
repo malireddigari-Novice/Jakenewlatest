@@ -756,6 +756,22 @@ CROSS_SESSION_MEMORY_ENABLED = os.getenv('CROSS_SESSION_MEMORY_ENABLED', 'false'
 # side (Friday's first AMZN put must overcome Thursday's funded call campaign).
 CROSS_SESSION_OPP_BUMP = float(os.getenv('CROSS_SESSION_OPP_BUMP', '0.15'))
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW-SPEC P3 — STATEFUL OPPOSITE-SIDE REVERSAL (ReversalCluster + EXIT != REVERSE)
+# Opposite-side flow builds evidence through a stateful cluster (OPPOSITE_FLOW_DETECTED → WATCH →
+# CONFIRMED → ACTIVATED) rather than flipping a position on one print. At ACTIVATED the incumbent
+# exits — EXIT_REVERSE if the opposite side independently qualifies as a fresh entry, else EXIT_FLAT.
+# When enabled, the reversal cluster OWNS opposite-side exits (CampaignConfidence then only exits on
+# own-side deterioration). Flag-gated, default OFF.
+# ═══════════════════════════════════════════════════════════════════════════════
+REVERSAL_ENABLED     = os.getenv('REVERSAL_ENABLED', 'false').lower() == 'true'
+REV_OPP_CONTROL_MIN  = float(os.getenv('REV_OPP_CONTROL_MIN', '0.55'))  # opp must own this to count as an event
+REV_OPP_Z            = float(os.getenv('REV_OPP_Z', '2.5'))            # opp abnormality to count as an event
+REV_WATCH_EVENTS     = int(os.getenv('REV_WATCH_EVENTS', '2'))          # opp events: DETECTED → WATCH
+REV_CONFIRM_EVENTS   = int(os.getenv('REV_CONFIRM_EVENTS', '3'))        # persistence alt for confirmation
+REV_CONFIRM_EVALS    = int(os.getenv('REV_CONFIRM_EVALS', '2'))         # sustained confirm polls → CONFIRMED
+REV_ACTIVATE_CONTROL = float(os.getenv('REV_ACTIVATE_CONTROL', '0.66')) # opp control to activate (with confirmed)
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')
