@@ -21,7 +21,8 @@ def local_value(marks=None, campaign_start=None, event_vwap=None, quoted_low=Non
     for v in (campaign_start, event_vwap):
         if v and v > 0:
             return float(v)
-    m = [float(x) for x in (marks or []) if x is not None and x > 0]
+    m = [float(x[1] if isinstance(x, (tuple, list)) else x)
+         for x in (marks or []) if x is not None and (x[1] if isinstance(x, (tuple, list)) else x)]
     if m:
         s = sorted(m)
         return s[len(s) // 2]                     # local median

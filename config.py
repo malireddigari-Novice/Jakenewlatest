@@ -670,7 +670,9 @@ SHEET_NAMES = {
 # so the current live behaviour is unchanged until a backtest validates it.
 # ═══════════════════════════════════════════════════════════════════════════════
 CAMPAIGN_CONFIDENCE_ENABLED = os.getenv('CAMPAIGN_CONFIDENCE_ENABLED', 'false').lower() == 'true'
-CONF_INIT             = float(os.getenv('CONF_INIT', '0.75'))     # confidence at entry
+CONF_INIT             = float(os.getenv('CONF_INIT', '0.75'))     # base confidence at entry
+CONF_MAX_INIT         = float(os.getenv('CONF_MAX_INIT', '0.95'))  # strongest campaigns start here (hysteresis)
+CONF_MAX_DROP_PER_POLL = float(os.getenv('CONF_MAX_DROP_PER_POLL', '0.12'))  # max confidence loss/poll (persistence)
 HOLD_EXIT_THRESHOLD   = float(os.getenv('HOLD_EXIT_THRESHOLD', '0.40'))  # exit when confidence drops below
 CONF_ROTATION_PENALTY = float(os.getenv('CONF_ROTATION_PENALTY', '0.10'))  # rotation = penalty, not command
 CONF_PEN_CONTROL      = float(os.getenv('CONF_PEN_CONTROL', '0.15'))   # side lost control
@@ -736,6 +738,7 @@ ACCEPTANCE_REJECT_DROP = float(os.getenv('ACCEPTANCE_REJECT_DROP', '0.05'))# rec
 # Reinforcement: same-side resurgence on a held position logs STRENGTHENING (not a new ENTER).
 REINFORCE_LOG_ENABLED     = os.getenv('REINFORCE_LOG_ENABLED', 'true').lower() == 'true'
 REINFORCE_MIN_INTERVAL_S  = float(os.getenv('REINFORCE_MIN_INTERVAL_S', '300'))  # throttle strengthening notices
+REINFORCE_MIN_CONF        = float(os.getenv('REINFORCE_MIN_CONF', '0.55'))  # don't post STRENGTHENING on a fading campaign
 # T+1 OI campaign confirmation (research): needs Schwab OI (currently off) to fetch next-day OI.
 OI_CONFIRM_ENABLED        = os.getenv('OI_CONFIRM_ENABLED', 'false').lower() == 'true'
 OI_CONFIRM_FILE           = os.getenv('OI_CONFIRM_FILE', 'jakenew_campaigns.jsonl')

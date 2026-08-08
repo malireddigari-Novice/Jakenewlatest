@@ -27,6 +27,12 @@ ck("heavy volume + premium holding flat → ABSORPTION (no appreciation required
    absb['label'] == 'ABSORPTION' and absb['absorbing'])
 # Light volume → NEUTRAL (not enough to classify).
 ck("light volume → NEUTRAL", fr.premium_acceptance([10, 10, 11, 10], [2, 2, 2, 2])['label'] == 'NEUTRAL')
+# Regression: contract_marks returns (ts, price) TUPLES — premium_acceptance must handle them
+# (this exact mismatch crashed the live engine every poll on 2026-08-07).
+tup = fr.premium_acceptance([100, 120, 900, 1000, 1100],
+                            [(1, 3.0), (2, 2.6), (3, 2.1), (4, 1.5), (5, 0.9)])
+ck("premium_acceptance handles (ts, price) tuple marks (live-crash regression)",
+   tup['label'] == 'REJECTION')
 
 print("── acceptance wired into entry routing ──")
 def cand(**kw):

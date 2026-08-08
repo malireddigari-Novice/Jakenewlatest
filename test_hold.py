@@ -25,6 +25,9 @@ ck("smoothness higher for an orderly climb than a whipsaw",
 ck("higher-low quality higher for rising lows than falling lows",
    hold.higher_low_quality([3.0, 3.5, 3.2, 4.0, 3.6, 4.5])
    > hold.higher_low_quality([5.0, 4.5, 4.6, 3.8, 3.9, 3.0]))
+ck("premium metrics accept (ts, price) tuple marks (live-crash regression)",
+   isinstance(hold.higher_low_quality([(1, 3.0), (2, 3.5), (3, 3.2), (4, 4.0)]), float)
+   and isinstance(hold.premium_smoothness([(1, 3.0), (2, 3.1), (3, 3.25)]), float))
 
 print("── confidence_step ──")
 INTACT = {'control_ok': True, 'opp_strong': False, 'dist_high': False, 'progressing': True,
@@ -38,12 +41,29 @@ ck("an ACTIVE campaign resists rotation (recovery bonus offsets the penalty)", c
 BAD = {'control_ok': False, 'opp_strong': True, 'dist_high': True, 'progressing': False,
        'higher_low': False}
 c_bad, cause_bad = hold.confidence_step(0.75, BAD, rotation_active=False)
-ck("multi-signal deterioration collapses confidence", c_bad < config.HOLD_EXIT_THRESHOLD)
-ck("dominant cause of collapse is the biggest penalty (distribution)", cause_bad == 'DISTRIBUTION')
+ck("multi-signal deterioration reduces confidence (drop-capped, not an instant collapse)",
+   0.75 > c_bad >= 0.75 - config.CONF_MAX_DROP_PER_POLL - 1e-9)
+ck("dominant cause is the biggest penalty (distribution)", cause_bad == 'DISTRIBUTION')
 ck("exit label maps distribution → VERIFIED_DISTRIBUTION",
    hold.exit_reason_from('DISTRIBUTION', BAD) == 'VERIFIED_DISTRIBUTION')
 ck("diffuse cause → TRUE_MULTI_VARIABLE_EXHAUSTION",
    hold.exit_reason_from(None, {}) == 'TRUE_MULTI_VARIABLE_EXHAUSTION')
+
+print("── incumbent-strength hysteresis + drop cap (NVDA/AAPL fast-exit fix) ──")
+strong = hold.initial_confidence(share=0.45, posterior=0.95, notional=1.3e6)
+weak = hold.initial_confidence(share=0.30, posterior=0.72, notional=6.0e4)
+ck("a heavily-funded campaign starts with HIGHER confidence than a marginal one", strong > weak)
+ck("initial confidence is capped", strong <= config.CONF_MAX_INIT)
+# One noisy poll cannot collapse a strong campaign below the exit threshold.
+c1, _ = hold.confidence_step(strong, BAD, rotation_active=True)
+ck("a single all-bad poll drops confidence by at most the per-poll cap",
+   strong - c1 <= config.CONF_MAX_DROP_PER_POLL + 1e-9)
+ck("a strong campaign survives one noisy poll (no instant exit)", c1 >= config.HOLD_EXIT_THRESHOLD)
+# But SUSTAINED deterioration still erodes it out over several polls.
+cN = strong
+for _ in range(8):
+    cN, _ = hold.confidence_step(cN, BAD, rotation_active=True)
+ck("sustained multi-poll deterioration still exits", cN < config.HOLD_EXIT_THRESHOLD)
 
 # ── wave integration: rotation is a penalty, not a command ────────────────────
 print("── confidence-based exits (wave engine) ──")

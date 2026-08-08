@@ -18,9 +18,22 @@ evidence (without needing appreciation) and REJECTION as a WATCH-not-ENTER signa
 import config
 
 
+def _prices(marks):
+    """Normalise a marks series to a list of positive prices. Accepts bare floats OR (ts, price)
+    tuples (contract_marks returns the latter)."""
+    out = []
+    for x in (marks or []):
+        if x is None:
+            continue
+        v = x[1] if isinstance(x, (tuple, list)) else x
+        if v is not None and v > 0:
+            out.append(float(v))
+    return out
+
+
 def premium_acceptance(minute_vols, marks) -> dict:
     vols = [float(v) for v in (minute_vols or []) if v is not None and v >= 0]
-    m = [float(x) for x in (marks or []) if x is not None and x > 0]
+    m = _prices(marks)
     if len(m) < 4 or len(vols) < 2:
         return {'label': 'NEUTRAL', 'score': 0.5, 'absorbing': False}
 

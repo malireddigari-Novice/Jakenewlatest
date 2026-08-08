@@ -530,6 +530,11 @@ class AttentionEngine:
             m = metrics_by.get(pos['symbol'])
             if not m or m.get('dominant_side') != pos['side']:
                 continue
+            # Never post STRENGTHENING on a campaign whose confidence has already faded toward exit —
+            # that produced the contradictory "STRENGTHENING + EXIT" output. One authoritative state.
+            w = self.waves.waves.get((pos['symbol'], pos['side']))
+            if w and w.confidence is not None and w.confidence < config.REINFORCE_MIN_CONF:
+                continue
             ctrl = m['call_control'] if pos['side'] == 'CALL' else m['put_control']
             strong = (m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z and ctrl >= config.WAVE_ACTIVE_CONTROL
                       and m.get('velocity', 0.0) > 0)
@@ -809,6 +814,9 @@ class AttentionEngine:
         w.entry_issued = True
         if w.active_ts is None:      # entered while FORMING → anchor the min-hold at entry time
             w.active_ts = now
+        # Incumbent-strength hysteresis: a strong, heavily-funded campaign starts with higher
+        # CampaignConfidence, so it takes more sustained opposing evidence to erode it out.
+        w.confidence = hold.initial_confidence(m.get('attention_share', 0.0), post, c.get('notional', 0.0))
 
         lag = None
         if c.get('first_ts'):

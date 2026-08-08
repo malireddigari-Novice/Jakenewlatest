@@ -20,6 +20,19 @@ ENTERING:
 import config
 
 
+def _prices(marks):
+    """Normalise a marks series to positive prices. Accepts bare floats OR (ts, price) tuples
+    (contract_marks returns [(ts, mark), ...])."""
+    out = []
+    for x in (marks or []):
+        if x is None:
+            continue
+        v = x[1] if isinstance(x, (tuple, list)) else x
+        if v is not None and v > 0:
+            out.append(float(v))
+    return out
+
+
 def premium_persistence(series) -> float:
     """0-1: did meaningful activity keep arriving over time (breadth) and not collapse after the
     first burst (sustain)? High for a persistent AAPL-style build, low for a lone TSLA spike."""
@@ -39,7 +52,7 @@ def premium_persistence(series) -> float:
 
 def premium_smoothness(marks) -> float:
     """0-1: orderly progression (mostly non-decreasing, path-efficient) vs whipsaw."""
-    m = [float(x) for x in marks if x is not None and x > 0]
+    m = _prices(marks)
     if len(m) < 3:
         return 0.5
     steps = [m[i + 1] - m[i] for i in range(len(m) - 1)]
@@ -51,7 +64,7 @@ def premium_smoothness(marks) -> float:
 
 def higher_low_quality(marks) -> float:
     """0-1: are successive pullback lows holding/rising (a resilient trend)?"""
-    m = [float(x) for x in marks if x is not None and x > 0]
+    m = _prices(marks)
     if len(m) < 4:
         return 0.5
     lows = [m[i] for i in range(1, len(m) - 1) if m[i] <= m[i - 1] and m[i] <= m[i + 1]]
@@ -95,9 +108,23 @@ def confidence_step(prev: float, f: dict, rotation_active: bool):
         conf += config.CONF_RECOVER_BONUS
     elif f.get('progressing', True) and not f.get('dist_high'):
         conf += config.CONF_HOLD_BONUS          # proven campaign drifts back up while healthy
+    # Per-poll DROP CAP — a single noisy poll (a transient control flip, one rotation snapshot)
+    # cannot collapse a campaign; deterioration must PERSIST across polls to exit. This is what stops
+    # the NVDA/AAPL 1-2 minute exits: a funded campaign now takes several sustained bad polls to erode.
+    conf = max(conf, prev - config.CONF_MAX_DROP_PER_POLL)
     conf = max(0.0, min(1.0, conf))
     dominant = max(causes, key=lambda x: x[1])[0] if causes else None
     return round(conf, 3), dominant
+
+
+def initial_confidence(share, posterior, notional) -> float:
+    """Incumbent-strength hysteresis: a heavily-funded, high-conviction campaign STARTS higher, so it
+    takes proportionally more opposing evidence to erode below the exit threshold (a strong campaign
+    should not be as fragile as a marginal one)."""
+    bonus = (min(0.10, max(0.0, (share or 0.0) - 0.30) * 0.5)              # high pool share
+             + min(0.05, max(0.0, (posterior or 0.0) - 0.70) * 0.5)       # high posterior
+             + min(0.05, (notional or 0.0) / 1e6 * 0.05))                  # large fresh premium
+    return round(min(config.CONF_MAX_INIT, config.CONF_INIT + bonus), 3)
 
 
 _EXIT_BY_CAUSE = {
