@@ -743,6 +743,19 @@ REINFORCE_MIN_CONF        = float(os.getenv('REINFORCE_MIN_CONF', '0.55'))  # do
 OI_CONFIRM_ENABLED        = os.getenv('OI_CONFIRM_ENABLED', 'false').lower() == 'true'
 OI_CONFIRM_FILE           = os.getenv('OI_CONFIRM_FILE', 'jakenew_campaigns.jsonl')
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW-SPEC P1 — CROSS-SESSION CAMPAIGN MEMORY
+# A campaign whose option expiration is still alive is serialized in the state file (saved every
+# poll → survives a mid-day RESTART too, not just overnight) and restored at startup, instead of the
+# engine waking up thinking every ticker is fresh (the AMZN Thursday→Friday reset). An inherited
+# campaign is under management, does NOT consume the new day's slot, and raises the bar for an
+# opposite-side entry that session (hysteresis). Flag-gated, default OFF.
+# ═══════════════════════════════════════════════════════════════════════════════
+CROSS_SESSION_MEMORY_ENABLED = os.getenv('CROSS_SESSION_MEMORY_ENABLED', 'false').lower() == 'true'
+# Extra route-asymmetry an opposite-side entry must clear when a surviving campaign holds the other
+# side (Friday's first AMZN put must overcome Thursday's funded call campaign).
+CROSS_SESSION_OPP_BUMP = float(os.getenv('CROSS_SESSION_OPP_BUMP', '0.15'))
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')

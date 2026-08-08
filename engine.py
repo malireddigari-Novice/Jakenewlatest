@@ -24,6 +24,7 @@ import notify
 import state
 from analysis import archetype
 from analysis import campaign
+from analysis import campaign_store
 from analysis import entry
 from analysis import events as ev
 from analysis import expiry
@@ -71,6 +72,10 @@ class AttentionEngine:
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
 
         self.state = state.load()
+        # P1: on a mid-day RESTART, don't treat today as a fresh session — anchor the session date
+        # from the persisted state so consumed slots + campaign memory survive the restart.
+        if config.CROSS_SESSION_MEMORY_ENABLED and self.state.get('day'):
+            self._hist['date'] = date.fromisoformat(self.state['day'])
         self._reconcile_positions()
 
     def _init_sheets(self):
@@ -110,6 +115,15 @@ class AttentionEngine:
             self._expiry_class.clear()
             self._surf_center.clear()
             self.state['entered_today'] = []       # NS: daily one-ENTER-per-side slots reset each session
+            # P1: carry surviving campaigns forward as inherited/overnight memory (prune expired),
+            # instead of waking up fresh. The intraday microstructure above is correctly reset; the
+            # campaign MEMORY persists so the engine manages yesterday's still-alive theses first.
+            if config.CROSS_SESSION_MEMORY_ENABLED:
+                carried = campaign_store.carry_forward(self.state.get('campaigns', {}), today)
+                self.state['campaigns'] = carried
+                if carried:
+                    logger.info("CAMPAIGN MEMORY: carried %d overnight campaign(s) into %s: %s",
+                                len(carried), today, ", ".join(carried))
             self.state['day'] = today.isoformat()
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
@@ -670,6 +684,16 @@ class AttentionEngine:
             route_ok = True
             logger.info("ENTRY-ROUTE %s %s %s asym=%.2f (archetype=%s) — soft gates bypassed",
                         sym, side, dec['route'], dec['score'], dec['archetype'])
+            # P1 overnight hysteresis: a surviving opposite-side campaign raises the bar (Friday's
+            # first AMZN put must overcome Thursday's funded call campaign).
+            if config.CROSS_SESSION_MEMORY_ENABLED:
+                opp = campaign_store.opposite_inherited(self.state.get('campaigns', {}), sym, side)
+                need = config.ENTRY_ROUTE_MIN_SCORE + config.CROSS_SESSION_OPP_BUMP
+                if opp and dec['score'] < need:
+                    logger.info("ENTRY-REJECT %s %s overnight-hysteresis: opposite %s campaign %s "
+                                "intact (asym %.2f < %.2f)", sym, side, opp['side'],
+                                opp['campaign_id'], dec['score'], need)
+                    return 'MISSED_DUE_TO_OVERNIGHT_HYSTERESIS'
         strict = config.OPENING_STRICT_MULT if is_opening_strict(now) else 1.0
         # §13 opening rework: instead of a blanket 1.4× penalty on every opening candidate, waive it
         # for a genuinely clean opening campaign — one that persists beyond the auction, shows a
@@ -817,6 +841,11 @@ class AttentionEngine:
         # Incumbent-strength hysteresis: a strong, heavily-funded campaign starts with higher
         # CampaignConfidence, so it takes more sustained opposing evidence to erode it out.
         w.confidence = hold.initial_confidence(m.get('attention_share', 0.0), post, c.get('notional', 0.0))
+        # P1: serialize the campaign so it survives session boundaries and restarts.
+        if config.CROSS_SESSION_MEMORY_ENABLED:
+            rec = campaign_store.record(sym, side, best['strike'], expiry.isoformat(),
+                                        now.date().isoformat(), w.confidence, 'ACTIVE', c.get('notional'))
+            self.state.setdefault('campaigns', {})[rec['campaign_id']] = rec
 
         lag = None
         if c.get('first_ts'):
@@ -939,6 +968,17 @@ class AttentionEngine:
                                        'mfe': mfe, 'mae': mae, 'entry_price': entry, 'exit_price': mark,
                                        'wave_id': pos.get('wave_id'), 'archetype': pos.get('archetype')}))
         mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
+        # P1: a genuine exit ends the campaign; an EOD flatten does NOT (position flat, but the
+        # campaign persists if the expiry survives — position persistence ≠ campaign persistence).
+        if config.CROSS_SESSION_MEMORY_ENABLED and reason != 'EOD_FLATTEN':
+            camps = self.state.get('campaigns', {})
+            try:
+                cid = campaign_store.campaign_id(pos['symbol'], pos['side'], pos['opened_at'][:10],
+                                                 pos['strike'])
+            except Exception:
+                cid = None
+            if cid in camps:
+                camps[cid]['state'] = 'COMPLETED' if reason in ('STRUCTURAL_TP2', 'RUNNER_TRAIL') else 'EXITED'
         self._sheet(lambda: self.sheets.log_trade_exit(pos, price=mark, reason=reason, pnl=pnl,
                                                        mode=mode, category=category, hold_s=hold_s,
                                                        mfe=mfe, mae=mae))
