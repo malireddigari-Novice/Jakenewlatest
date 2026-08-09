@@ -790,6 +790,21 @@ BARSHOCK_FAR_PCT       = float(os.getenv('BARSHOCK_FAR_PCT', '0.012'))  # above 
 BARSHOCK_CLUSTER_MIN   = int(os.getenv('BARSHOCK_CLUSTER_MIN', '3'))    # elevated strikes = coordinated event
 BARSHOCK_CONCENTRATED_REL = float(os.getenv('BARSHOCK_CONCENTRATED_REL', '1.8'))  # this/neighbor = concentrated
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW-SPEC P4 — EVENT-INFORMATION CONTRACT SELECTION
+# Choose the representative contract by event INFORMATION (BarVolumeShock significance + relevance +
+# executability + value), not just mass/volume — so NVDA 222.5P can beat the noisier 220P. Consumes
+# the P2 per-strike shocks. Flag-gated (default OFF); falls back to the mass-based selector.
+# ═══════════════════════════════════════════════════════════════════════════════
+EVENT_SELECT_ENABLED = os.getenv('EVENT_SELECT_ENABLED', 'false').lower() == 'true'
+EVENT_SELECT_WINDOW  = int(os.getenv('EVENT_SELECT_WINDOW', '2'))   # consider ATM ± this many strikes
+ES_W_SHOCK     = float(os.getenv('ES_W_SHOCK', '0.30'))
+ES_W_SIG       = float(os.getenv('ES_W_SIG', '0.15'))
+ES_W_RELEVANCE = float(os.getenv('ES_W_RELEVANCE', '0.20'))
+ES_W_SPREAD    = float(os.getenv('ES_W_SPREAD', '0.15'))
+ES_W_LIQ       = float(os.getenv('ES_W_LIQ', '0.10'))
+ES_W_ROOM      = float(os.getenv('ES_W_ROOM', '0.10'))
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')

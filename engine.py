@@ -26,6 +26,7 @@ from analysis import archetype
 from analysis import barshock
 from analysis import campaign
 from analysis import campaign_store
+from analysis import contract_select
 from analysis import entry
 from analysis import events as ev
 from analysis import expiry
@@ -373,7 +374,20 @@ class AttentionEngine:
                             'call': masses['call'], 'put': masses['put']}
             if dom:
                 side_strikes = [d for (k, s), d in sf['strikes'].items() if s == dom]
-                best = ev.select_contract(dom, side_strikes, sf['spot'])
+                # P2/P4: per-strike BarVolumeShock, computed once here and reused for the barshock
+                # log and for event-information contract selection.
+                shk_by_strike = {}
+                if config.BARSHOCK_ENABLED or config.EVENT_SELECT_ENABLED:
+                    for k in (masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']):
+                        mk = ((self._snaps.get(sym) or {}).get((k, dom)) or {}).get('mark')
+                        shk_by_strike[k] = barshock.bar_shock(
+                            self.flow.contract_minute_vols(sym, k, dom, now), mk)
+                # P4: pick the highest-information contract (falls back to the mass-based selector).
+                if config.EVENT_SELECT_ENABLED:
+                    best = (contract_select.select(dom, side_strikes, sf['spot'], shk_by_strike)
+                            or ev.select_contract(dom, side_strikes, sf['spot']))
+                else:
+                    best = ev.select_contract(dom, side_strikes, sf['spot'])
                 if best:
                     fkey = (sym, dom)
                     if tm['mass_z'] >= config.WAVE_FORMING_Z:
@@ -475,12 +489,7 @@ class AttentionEngine:
                     # P2: per-strike BarVolumeShock across the dominant side's strikes (research/log;
                     # the highest-information strike right now, vs its own baseline + neighbors).
                     if config.BARSHOCK_ENABLED:
-                        ssm = masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']
-                        shk = {}
-                        for k in ssm:
-                            mk = ((self._snaps.get(sym) or {}).get((k, dom)) or {}).get('mark')
-                            shk[k] = barshock.bar_shock(
-                                self.flow.contract_minute_vols(sym, k, dom, now), mk)
+                        shk = shk_by_strike
                         if shk:
                             tk = max(shk, key=lambda kk: shk[kk]['shock'])
                             top = shk[tk]

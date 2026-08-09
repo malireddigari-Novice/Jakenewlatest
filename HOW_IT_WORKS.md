@@ -529,6 +529,35 @@ re-entry) was already delivered by FU-P1 (CampaignConfidence). The new entry/ale
   CLOSING_CHURN / INCONCLUSIVE) — whether today's volume became real open interest. Needs Schwab OI
   (currently off). Tests: `test_newspec.py` (14 checks). **18 test files green.**
 
+**New-spec §1-37 — "institutional campaign detector" priority build (NVDA/AAPL churn lessons).**
+Built in priority order, each a pure module + config + test, **all flag-gated OFF** (live posture
+unchanged):
+- **P1 — cross-session campaign memory (`analysis/campaign_store.py`, `CROSS_SESSION_MEMORY_ENABLED`,
+  default OFF).** A campaign that is still valid at EOD (multi-day expiry, side still in control) is
+  serialized to the state file and **restored at startup**, so a real institutional position survives
+  a restart or an overnight gap instead of being re-discovered cold. `carry_forward` on a new day,
+  overnight classification + hysteresis, terminal on any non-EOD exit. Tests: `test_campaign_store.py`.
+- **P2 — per-strike BarVolumeShock (`analysis/barshock.py`, `BARSHOCK_ENABLED`, default OFF).** Total
+  volume is not information. Each contract's current 1-min volume is scored against its **own robust
+  baseline (median + MAD)** so a persistently-busy strike adapts into its background while a normally-
+  quiet strike that suddenly prints becomes highly informative; a tiny-baseline safeguard (#6) requires
+  an absolute contracts + notional floor before a shock is `significant`. Cross-strike `relative_shock`,
+  `cluster_shock`, and `classify_event` (CONCENTRATED vs COORDINATED_MULTI_STRIKE). Event-time
+  moneyness (#8) is stored, never recomputed from a later spot. Tests: `test_barshock.py`.
+- **P3 — cross-strike ReversalCluster + EXIT≠REVERSE (`analysis/reversal.py`, `REVERSAL_ENABLED`,
+  default OFF).** Opposite-side flow is a *state machine* — OPPOSITE_FLOW_DETECTED → REVERSAL_WATCH →
+  REVERSAL_CLUSTER_CONFIRMED → REVERSAL_ACTIVATED — not an instant flip. `outcome()` separates the two
+  decisions the old engine conflated: **HOLD / EXIT_FLAT / EXIT_REVERSE** (exiting your side ≠
+  entering the other). When enabled, `_manage_reversal` owns opposite-side exits and CampaignConfidence's
+  `opp_strong` shortcut is gated off. Tests: `test_reversal.py`.
+- **P4 — event-information contract selection (`analysis/contract_select.py`, `EVENT_SELECT_ENABLED`,
+  default OFF).** The representative contract is chosen by event **information** — BarVolumeShock
+  significance + ATM relevance + executability (spread/liquidity) + value (room from low) over the
+  ATM±`EVENT_SELECT_WINDOW` strikes — not by raw mass. This is how the engine picks the NVDA 222.5P
+  carrying the event over the noisier, higher-volume 220P. Consumes the P2 per-strike shocks (computed
+  once in the engine and shared with the barshock log). Falls back to the mass-based `events.select_contract`
+  when it finds nothing quotable. Tests: `test_contract_select.py`. **22 test files green.**
+
 ---
 
 ## Honest status — running ACTIVE on paper, edge NOT yet proven
@@ -628,3 +657,8 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `STABILIZE_MIN_CONTROL` / `_OPP_CONTROL` | 0.55 / 0.60 | side still controls / opposite side is a real threat |
 | `WAVE_STABILIZE_MAX_S` | 900 | max time a wave stays STABILIZING before fade-out counts as decay |
 | `ROTATION_REQUIRE_INCUMBENT_WEAK` | true | rotation exit needs the incumbent's own campaign fading too |
+| `CROSS_SESSION_MEMORY_ENABLED` | **false** | new-spec P1: campaigns valid at EOD survive restart/overnight — shadow |
+| `BARSHOCK_ENABLED` | **false** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — research/log |
+| `REVERSAL_ENABLED` | **false** | new-spec P3: cross-strike ReversalCluster state machine; EXIT≠REVERSE — shadow |
+| `EVENT_SELECT_ENABLED` | **false** | new-spec P4: pick the highest-event-information contract (not raw mass) — shadow |
+| `EVENT_SELECT_WINDOW` | 2 | P4: consider ATM ± this many strikes when event-selecting |
