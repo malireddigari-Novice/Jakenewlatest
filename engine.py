@@ -23,6 +23,7 @@ import execution
 import notify
 import state
 from analysis import archetype
+from analysis import barshock
 from analysis import campaign
 from analysis import campaign_store
 from analysis import entry
@@ -471,6 +472,26 @@ class AttentionEngine:
                     # New-spec: Premium Acceptance — absorption vs rejection under heavy volume.
                     if config.ACCEPTANCE_ENABLED:
                         cand[sym]['acceptance'] = flow_response.premium_acceptance(minute_vols, marks)
+                    # P2: per-strike BarVolumeShock across the dominant side's strikes (research/log;
+                    # the highest-information strike right now, vs its own baseline + neighbors).
+                    if config.BARSHOCK_ENABLED:
+                        ssm = masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']
+                        shk = {}
+                        for k in ssm:
+                            mk = ((self._snaps.get(sym) or {}).get((k, dom)) or {}).get('mark')
+                            shk[k] = barshock.bar_shock(
+                                self.flow.contract_minute_vols(sym, k, dom, now), mk)
+                        if shk:
+                            tk = max(shk, key=lambda kk: shk[kk]['shock'])
+                            top = shk[tk]
+                            rel = barshock.relative_shock(
+                                top['shock'], [s['shock'] for kk, s in shk.items() if kk != tk])
+                            clus = barshock.cluster_shock([s['shock'] for s in shk.values()])
+                            cand[sym]['barshock'] = {
+                                'top_strike': tk, 'shock': top['shock'], 'rel_shock': rel,
+                                'cluster': clus, 'significant': top['significant'],
+                                'event_type': barshock.classify_event(top['shock'], rel, clus),
+                                'position': barshock.strike_position(tk, sf['spot'], dom)}
                     # Phase 5: strike-surface profile (ticker-level campaign first; research/log).
                     if config.SURFACE_ENABLED:
                         sm = masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']
@@ -930,6 +951,7 @@ class AttentionEngine:
             'surface_class': (c.get('surface') or {}).get('classification'),
             'quality': c.get('quality'),
             'acceptance': (c.get('acceptance') or {}).get('label'),
+            'barshock_event': (c.get('barshock') or {}).get('event_type'),
             'entry_score': m['attention_score'], 'entry_z': m['mass_z'],
             'entry_share': m['attention_share'], 'entry_rank': m['rank'],
             'entry_control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
@@ -964,6 +986,11 @@ class AttentionEngine:
         if config.ACCEPTANCE_ENABLED and acc:
             logger.info("  FLOW %s %s premium-acceptance=%s (score=%.2f)", sym, side,
                         acc['label'], acc['score'])
+        bs = c.get('barshock')
+        if config.BARSHOCK_ENABLED and bs:
+            logger.info("  BARSHOCK %s %s top=%g@%s shock=%.1f rel=%.1f cluster=%d %s (sig=%s)", sym,
+                        side, bs['top_strike'], bs['position'], bs['shock'], bs['rel_shock'],
+                        bs['cluster'], bs['event_type'], bs['significant'])
         notify.entry_card(self._board_ctx(ranked, market_mass), symbol=sym, side=side,
                           strike=best['strike'], expiry=expiry.isoformat(), qty=qty, price=limit,
                           row=self._board_ctx(ranked, market_mass)['by_symbol'][sym], spot=spot,

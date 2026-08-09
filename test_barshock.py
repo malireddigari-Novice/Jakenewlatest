@@ -1,0 +1,45 @@
+"""Per-strike BarVolumeShock tests (new-spec P2). Run: python test_barshock.py"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config
+from analysis import barshock as bs
+
+fails = 0
+def ck(name, cond):
+    global fails
+    print(("PASS" if cond else "FAIL"), name)
+    if not cond:
+        fails += 1
+
+print("── BarVolumeShock (robust baseline + tiny-baseline safeguard) ──")
+# A normally-quiet contract that suddenly prints 1,000 → high shock AND significant.
+quiet = bs.bar_shock([20, 30, 25, 15, 30, 1000], mark=2.5)
+ck("quiet contract + sudden large print → high shock", quiet['shock'] >= config.BARSHOCK_MIN_Z)
+ck("...and it is significant (clears absolute floor)", quiet['significant'])
+# A persistently-busy contract adapts into its own background (median high → low shock).
+busy = bs.bar_shock([900, 1000, 950, 1100, 980, 1000], mark=2.5)
+ck("persistently-busy contract normalizes into background (low shock)", busy['shock'] < config.BARSHOCK_MIN_Z)
+# Tiny baseline (#6): 1→20 is a huge RATIO but not economically significant → not significant.
+tiny = bs.bar_shock([1, 0, 1, 1, 0, 20], mark=0.10)
+ck("tiny-baseline spike is NOT significant (absolute floor)", not tiny['significant'])
+ck("short history → no shock", bs.bar_shock([100, 200])['shock'] == 0.0)
+
+print("── strike position at event time (#8) ──")
+ck("call strike below spot → ITM", bs.strike_position(215, 220, 'CALL').endswith('ITM'))
+ck("call strike above spot → OTM", bs.strike_position(225, 220, 'CALL').endswith('OTM'))
+ck("put strike above spot → ITM", bs.strike_position(225, 220, 'PUT').endswith('ITM'))
+ck("near spot → ATM", bs.strike_position(220, 220, 'CALL') == 'ATM')
+
+print("── relative + cluster + classification ──")
+ck("relative shock vs neighbors", bs.relative_shock(9.0, [3.0, 2.0]) == 3.0)
+ck("cluster counts elevated strikes", bs.cluster_shock([4.0, 5.0, 3.5, 1.0]) == 3)
+ck("many strikes elevated → COORDINATED_MULTI_STRIKE_EVENT",
+   bs.classify_event(5.0, 1.1, 3) == 'COORDINATED_MULTI_STRIKE_EVENT')
+ck("one strike dominant vs neighbors → CONCENTRATED_SINGLE_STRIKE_EVENT",
+   bs.classify_event(9.0, 3.0, 1) == 'CONCENTRATED_SINGLE_STRIKE_EVENT')
+ck("below-threshold shock → NONE", bs.classify_event(1.0, 1.0, 0) == 'NONE')
+
+print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
+sys.exit(1 if fails else 0)

@@ -772,6 +772,24 @@ REV_CONFIRM_EVENTS   = int(os.getenv('REV_CONFIRM_EVENTS', '3'))        # persis
 REV_CONFIRM_EVALS    = int(os.getenv('REV_CONFIRM_EVALS', '2'))         # sustained confirm polls → CONFIRMED
 REV_ACTIVATE_CONTROL = float(os.getenv('REV_ACTIVATE_CONTROL', '0.66')) # opp control to activate (with confirmed)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW-SPEC P2 — PER-STRIKE EVENT-TIME ABNORMALITY (BarVolumeShock)
+# Which strike carries the most abnormal NEW information right now, vs its own robust baseline and its
+# neighbors. Computes + logs (like EarlyAccumulationScore) — the detection layer P4 (event-based
+# contract selection) will consume; it does not gate entries yet. Tiny-baseline safeguard: a shock
+# only counts when it also clears an absolute contracts/notional floor.
+# ═══════════════════════════════════════════════════════════════════════════════
+BARSHOCK_ENABLED       = os.getenv('BARSHOCK_ENABLED', 'true').lower() == 'true'  # compute + log
+BARSHOCK_MIN_BINS      = int(os.getenv('BARSHOCK_MIN_BINS', '4'))       # min minute-bins for a baseline
+BARSHOCK_EPS           = float(os.getenv('BARSHOCK_EPS', '5.0'))        # dispersion floor (contracts)
+BARSHOCK_MIN_Z         = float(os.getenv('BARSHOCK_MIN_Z', '3.0'))      # robust-Z to be an event
+BARSHOCK_MIN_CONTRACTS = int(os.getenv('BARSHOCK_MIN_CONTRACTS', '250'))# absolute significance floor (#6)
+BARSHOCK_MIN_NOTIONAL  = float(os.getenv('BARSHOCK_MIN_NOTIONAL', '50000'))  # absolute $ floor (#6)
+BARSHOCK_ATM_PCT       = float(os.getenv('BARSHOCK_ATM_PCT', '0.004'))  # |K-S|/S below = ATM (#8)
+BARSHOCK_FAR_PCT       = float(os.getenv('BARSHOCK_FAR_PCT', '0.012'))  # above = 2 strikes away
+BARSHOCK_CLUSTER_MIN   = int(os.getenv('BARSHOCK_CLUSTER_MIN', '3'))    # elevated strikes = coordinated event
+BARSHOCK_CONCENTRATED_REL = float(os.getenv('BARSHOCK_CONCENTRATED_REL', '1.8'))  # this/neighbor = concentrated
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')
