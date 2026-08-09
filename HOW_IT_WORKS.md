@@ -556,7 +556,22 @@ unchanged):
   ATM±`EVENT_SELECT_WINDOW` strikes — not by raw mass. This is how the engine picks the NVDA 222.5P
   carrying the event over the noisier, higher-volume 220P. Consumes the P2 per-strike shocks (computed
   once in the engine and shared with the barshock log). Falls back to the mass-based `events.select_contract`
-  when it finds nothing quotable. Tests: `test_contract_select.py`. **22 test files green.**
+  when it finds nothing quotable. Tests: `test_contract_select.py`.
+- **P5 — TSLA control/detection replay (`replay_session.py`).** A read-only, campaign-level replay
+  (no orders, no state) that reconstructs a whole (ticker, side) campaign poll-by-poll through the
+  **real** analysis modules — `attention.attention_board` (Layer 1 MAG7 pool), P2 `barshock`, P4
+  `contract_select`, P3 `reversal`, and the `hold` CampaignConfidence engine — and answers the
+  spec's post-mortem questions: raw/fresh CALL+PUT premium, control, attention score/rank/pool
+  share, incumbent campaign state + confidence, opposite-side cross-strike reversal state, premium
+  acceptance, the selected contract, the exact exit condition and **which module owned it**, and
+  whether another module simultaneously read the campaign as *strengthening* (the "EXIT while
+  STRENGTHENING" contradiction). It quantifies forfeited convexity as **MFE/MAE measured from ENTRY
+  and from EXIT**. Bid/ask/size are synthesized from the bar (as the backtest does); all
+  volume/premium/price data is real Alpaca 1-min. First run — TSLA 2026-08-04 CALL — reproduced the
+  pattern: entry 09:35 ET, exit 9 min later at -28% (`HOLD_CONFIDENCE` / `PREMIUM_STRUCTURE_FAILURE`),
+  the contract then ran **+75% from the exit price** — the early exit forfeited that convexity.
+  **22 test files green** (P5 is a network diagnostic, like `replay_campaign.py`, so it carries no
+  unit test — its inputs are the already-tested pure modules).
 
 ---
 
@@ -658,7 +673,7 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `WAVE_STABILIZE_MAX_S` | 900 | max time a wave stays STABILIZING before fade-out counts as decay |
 | `ROTATION_REQUIRE_INCUMBENT_WEAK` | true | rotation exit needs the incumbent's own campaign fading too |
 | `CROSS_SESSION_MEMORY_ENABLED` | **false** | new-spec P1: campaigns valid at EOD survive restart/overnight — shadow |
-| `BARSHOCK_ENABLED` | **false** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — research/log |
+| `BARSHOCK_ENABLED` | **true** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — compute + log only, does NOT gate trades |
 | `REVERSAL_ENABLED` | **false** | new-spec P3: cross-strike ReversalCluster state machine; EXIT≠REVERSE — shadow |
 | `EVENT_SELECT_ENABLED` | **false** | new-spec P4: pick the highest-event-information contract (not raw mass) — shadow |
 | `EVENT_SELECT_WINDOW` | 2 | P4: consider ATM ± this many strikes when event-selecting |
