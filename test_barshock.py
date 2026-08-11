@@ -41,5 +41,22 @@ ck("one strike dominant vs neighbors → CONCENTRATED_SINGLE_STRIKE_EVENT",
    bs.classify_event(9.0, 3.0, 1) == 'CONCENTRATED_SINGLE_STRIKE_EVENT')
 ck("below-threshold shock → NONE", bs.classify_event(1.0, 1.0, 0) == 'NONE')
 
+print("── entry_gate (hard evidence gate) ──")
+# a genuine concentrated event → ALLOW
+ok, why = bs.entry_gate({'event_type': 'CONCENTRATED_SINGLE_STRIKE_EVENT', 'significant': True})
+ck("significant concentrated event → allow", ok)
+# a coordinated multi-strike event → ALLOW
+ok, why = bs.entry_gate({'event_type': 'COORDINATED_MULTI_STRIKE_EVENT', 'significant': True})
+ck("significant coordinated event → allow", ok)
+# no abnormal event (background flow) → VETO
+ok, why = bs.entry_gate({'event_type': 'NONE', 'significant': False})
+ck("no abnormal event → veto", (not ok) and why == 'NO_ABNORMAL_EVENT')
+# clears Z but fails the absolute floor (tiny-baseline) → VETO
+ok, why = bs.entry_gate({'event_type': 'STRIKE_EVENT', 'significant': False})
+ck("sub-floor (not significant) event → veto", (not ok) and why == 'SUBTHRESHOLD_EVENT')
+# missing data → ALLOW (never starve entries on absent evidence)
+ok, why = bs.entry_gate(None)
+ck("missing barshock data → allow (no veto on absent evidence)", ok and why == 'NO_BARSHOCK_DATA')
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

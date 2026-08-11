@@ -780,6 +780,7 @@ REV_ACTIVATE_CONTROL = float(os.getenv('REV_ACTIVATE_CONTROL', '0.66')) # opp co
 # only counts when it also clears an absolute contracts/notional floor.
 # ═══════════════════════════════════════════════════════════════════════════════
 BARSHOCK_ENABLED       = os.getenv('BARSHOCK_ENABLED', 'true').lower() == 'true'  # compute + log
+BARSHOCK_GATE_ENABLED  = os.getenv('BARSHOCK_GATE_ENABLED', 'false').lower() == 'true'  # VETO entries with no genuine event
 BARSHOCK_MIN_BINS      = int(os.getenv('BARSHOCK_MIN_BINS', '4'))       # min minute-bins for a baseline
 BARSHOCK_EPS           = float(os.getenv('BARSHOCK_EPS', '5.0'))        # dispersion floor (contracts)
 BARSHOCK_MIN_Z         = float(os.getenv('BARSHOCK_MIN_Z', '3.0'))      # robust-Z to be an event

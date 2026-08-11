@@ -543,7 +543,13 @@ unchanged):
   quiet strike that suddenly prints becomes highly informative; a tiny-baseline safeguard (#6) requires
   an absolute contracts + notional floor before a shock is `significant`. Cross-strike `relative_shock`,
   `cluster_shock`, and `classify_event` (CONCENTRATED vs COORDINATED_MULTI_STRIKE). Event-time
-  moneyness (#8) is stored, never recomputed from a later spot. Tests: `test_barshock.py`.
+  moneyness (#8) is stored, never recomputed from a later spot. A **hard entry-gate**
+  (`barshock.entry_gate`, `BARSHOCK_GATE_ENABLED`, default OFF) can veto any entry whose traded side
+  shows no genuine abnormal event — `NO_ABNORMAL_EVENT` (shock below the robust-Z threshold, i.e.
+  background flow) or `SUBTHRESHOLD_EVENT` (clears Z but fails the absolute contracts/$ floor, i.e. a
+  tiny-baseline ratio spike). It applies in BOTH route and conjunctive modes and degrades to ALLOW
+  when no barshock read exists (so a not-yet-formed opening baseline never starves entries).
+  Tests: `test_barshock.py`.
 - **P3 — cross-strike ReversalCluster + EXIT≠REVERSE (`analysis/reversal.py`, `REVERSAL_ENABLED`,
   default OFF).** Opposite-side flow is a *state machine* — OPPOSITE_FLOW_DETECTED → REVERSAL_WATCH →
   REVERSAL_CLUSTER_CONFIRMED → REVERSAL_ACTIVATED — not an instant flip. `outcome()` separates the two
@@ -673,7 +679,8 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `WAVE_STABILIZE_MAX_S` | 900 | max time a wave stays STABILIZING before fade-out counts as decay |
 | `ROTATION_REQUIRE_INCUMBENT_WEAK` | true | rotation exit needs the incumbent's own campaign fading too |
 | `CROSS_SESSION_MEMORY_ENABLED` | **false** | new-spec P1: campaigns valid at EOD survive restart/overnight — shadow |
-| `BARSHOCK_ENABLED` | **true** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — compute + log only, does NOT gate trades |
+| `BARSHOCK_ENABLED` | **true** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — compute + log + feed P4 event-select |
+| `BARSHOCK_GATE_ENABLED` | **false** | P2 hard entry-gate: VETO entries with no genuine abnormal event (background / sub-floor spike) |
 | `REVERSAL_ENABLED` | **false** | new-spec P3: cross-strike ReversalCluster state machine; EXIT≠REVERSE — shadow |
 | `EVENT_SELECT_ENABLED` | **false** | new-spec P4: pick the highest-event-information contract (not raw mass) — shadow |
 | `EVENT_SELECT_WINDOW` | 2 | P4: consider ATM ± this many strikes when event-selecting |

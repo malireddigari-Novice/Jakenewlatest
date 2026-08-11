@@ -776,6 +776,15 @@ class AttentionEngine:
                                 "intact (asym %.2f < %.2f)", sym, side, opp['side'],
                                 opp['campaign_id'], dec['score'], need)
                     return 'MISSED_DUE_TO_OVERNIGHT_HYSTERESIS'
+        # P2 barshock entry-gate: require a genuine abnormal event on the traded side before entering —
+        # background flow (no significant BarVolumeShock) or a sub-floor tiny-baseline spike is NOT a
+        # tradeable event. A HARD evidence gate: applies in BOTH route and conjunctive modes (like the
+        # microstructure vetoes). Degrades to ALLOW when no barshock read exists. Default OFF.
+        if config.BARSHOCK_GATE_ENABLED:
+            bs_ok, bs_why = barshock.entry_gate(c.get('barshock'))
+            if not bs_ok:
+                logger.info("ENTRY-REJECT %s %s barshock-gate=%s (no genuine event)", sym, side, bs_why)
+                return 'ECONOMICALLY_VALID_REJECTION'
         strict = config.OPENING_STRICT_MULT if is_opening_strict(now) else 1.0
         # §13 opening rework: instead of a blanket 1.4× penalty on every opening candidate, waive it
         # for a genuinely clean opening campaign — one that persists beyond the auction, shows a

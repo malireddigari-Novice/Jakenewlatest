@@ -71,3 +71,23 @@ def classify_event(this_shock, rel_shock, cluster_count) -> str:
     if rel_shock >= config.BARSHOCK_CONCENTRATED_REL:
         return 'CONCENTRATED_SINGLE_STRIKE_EVENT'
     return 'STRIKE_EVENT'
+
+
+def entry_gate(summary) -> tuple:
+    """Hard entry-gate on per-strike BarVolumeShock evidence (spec §1-5): only enter when the traded
+    side shows a GENUINE abnormal event right now — not continuously-elevated background, and not a
+    tiny-baseline ratio spike that fails the absolute contracts/$ floor.
+
+    `summary` is the engine's dominant-side barshock read {event_type, significant, top_strike, shock,
+    ...} for this poll (or None). Returns (allow: bool, reason: str).
+
+    Missing/degenerate data → ALLOW (there is no positive evidence to veto on — e.g. opening baselines
+    too short); a veto only fires on a POSITIVELY-identified non-event, so the gate never silently
+    starves entries just because a baseline hasn't formed yet."""
+    if not summary:
+        return True, 'NO_BARSHOCK_DATA'
+    if summary.get('event_type', 'NONE') == 'NONE':
+        return False, 'NO_ABNORMAL_EVENT'        # shock below the robust-Z event threshold (background)
+    if not summary.get('significant'):
+        return False, 'SUBTHRESHOLD_EVENT'       # clears Z but not the absolute contracts/$ floor (#6)
+    return True, summary.get('event_type')

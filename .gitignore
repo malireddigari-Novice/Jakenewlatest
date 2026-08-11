@@ -39,3 +39,5 @@ jakevolume-*.json
 # Research data dumps / throwaway state
 *.jsonl
 bt_state.json
+
+.schwab_auth_ctx.json
