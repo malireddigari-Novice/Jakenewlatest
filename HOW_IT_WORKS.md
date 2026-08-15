@@ -443,6 +443,57 @@ P&L; `python -m analysis.calibration` prints the report over the archive. Tests:
 proxy deserves to be trusted (and, per the deferred-research note, whether the heavier statistical
 machinery is yet justified).
 
+### Addendum subsystems — inventory / packages / portfolio (2026-08-15, ON for the paper run)
+
+The consolidated addendum named the "biggest remaining blind spots": the engine was modeling **events
+and campaigns** while institutions actually manage **inventory**. Three new layers close that gap.
+Each is flag-gated (default ON in `.env` for the paper forward-test) and the read is wrapped so a
+data-shape surprise can never break a poll.
+
+**Inventory Memory (`analysis/inventory.py`, `INVENTORY_ENABLED`).** *A print has no meaning in
+isolation from the inventory history that preceded it.* Per surviving contract
+(`ticker|side|strike|expiry`) the engine remembers each significant print (size + price) as a
+size-weighted **cost-basis zone**, and derives on every fresh print: **drift** vs basis,
+**MarginalFlowEfficiency** (ΔP since the last clip ÷ that clip's size — the genuinely marginal read),
+an **inventory state** (`UNKNOWN / LIKELY_BUILDING / LIKELY_FUNDED / LIKELY_PARTIAL_EXIT`) and an
+**ambiguity** (`LOW/MED/HIGH`). The flagship case — *yesterday 1,000 @ $3, today 1,000 @ $1* — lands
+far **below** basis, so unwind-vs-fresh is genuinely ambiguous → **HIGH → `INVENTORY_AMBIGUITY_PASS`**
+(a first-class abstain; passing is a feature, not a failure). A clip **far above** basis whose
+marginal MFE has **stalled** is distribution-into-strength → also HIGH. MED softly discounts
+`P(continue)` before the EV gate; HIGH abstains. The same memory suppresses a false **CAMPAIGN
+STRENGTHENING** when same-side flow on a held position no longer advances premium (weak MFE = the
+"slow hidden exit"). Records are **cross-session**, pruned only when the expiry dies (like campaign
+memory). Tests: `test_inventory.py` (15 checks).
+
+**Package / Leg / Roll Resolver (`analysis/packages.py`, `PACKAGES_ENABLED`).** A gorgeous
+single-strike print can be one leg of a vertical / calendar / roll / ratio / straddle. Without
+buy/sell tags we resolve by **size-matched co-prints** on the surface within a poll: adjacent
+same-side match → `VERTICAL_LIKELY`; same-strike call+put → `STRADDLE_COMBO_LIKELY`; ~2:1 ratio →
+`RATIO_LIKELY`; equal same-strike/side in a neighboring expiry → `ROLL_LIKELY`; otherwise
+`OUTRIGHT_LIKELY`. A leg-looking contract is **discounted** (its `P(continue)` is cut by
+`PKG_DISCOUNT`), and — behind `PKG_VETO_ENABLED` (**OFF** for Monday: observe first) — hard-rejected.
+Tests: `test_packages.py` (9 checks).
+
+**Portfolio correlation risk (`analysis/portfolio.py`, `PORTFOLIO_RISK_ENABLED`).** Discovery stays
+unconstrained (multiple Mag-7 campaigns may coexist — safeguard #7), but the Mag-7 are **one
+correlated factor**: four independent CALL campaigns is really one big long-Nasdaq bet. This layer
+aggregates same-direction exposure across open positions and, at entry only, **vetoes** a new leg that
+would push correlated same-direction campaigns past `PORT_MAX_CORR_SIDE` (default 4) — a risk gate,
+never a discovery or hold constraint, and it never forces an exit. Tests: `test_portfolio.py` (7
+checks). New entry-reject reasons: `INVENTORY_AMBIGUITY_PASS`, `PACKAGE_LEG_REJECTION`,
+`PORTFOLIO_CONCENTRATION_LIMIT`.
+
+> **Flag status (2026-08-15):** the entire new-spec cluster (qualified control, reversal cluster, exit
+> arbitration, campaign confidence, stabilize, entry routes, daily lock, event-select, barshock gate,
+> surface gate, cross-session memory, early detect, opening quality, archetype gate, multi-expiry,
+> runner) **and** these three addendum subsystems are **ON** in `.env`. Execution is **Alpaca PAPER**
+> (`ALPACA_ENABLED=true`, `ALPACA_PAPER=true`) — simulated money, live paper forward-test.
+
+**Still not built (documented backlog):** OPRA trade-condition / quote-sync validation (#11-12),
+premium-move delta/gamma/vega decomposition (#14), the full multi-hypothesis H1–H8 engine (#9, only a
+single Bayesian posterior today), cross-expiry as a *directional* input (multi-expiry is still
+shadow/log), and negative-control / frozen-time regression harnesses (#15-16).
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.
@@ -681,6 +732,8 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `CROSS_SESSION_MEMORY_ENABLED` | **false** | new-spec P1: campaigns valid at EOD survive restart/overnight — shadow |
 | `BARSHOCK_ENABLED` | **true** | new-spec P2: per-strike robust BarVolumeShock (median/MAD) — compute + log + feed P4 event-select |
 | `BARSHOCK_GATE_ENABLED` | **false** | P2 hard entry-gate: VETO entries with no genuine abnormal event (background / sub-floor spike) |
+| `QUALIFIED_CONTROL_ENABLED` | **false** | side control from QUALIFIED mass (discount DISTRIBUTED / premium-REJECTING / stale flow), not raw call-vs-put mass — NVDA 8/11 220C-vs-220P |
+| `EXIT_ARBITRATION_ENABLED` | **false** | a raw control-flip is an INPUT to the reversal machine, not an exit; STRENGTHENING campaign suppresses control/opp exits |
 | `REVERSAL_ENABLED` | **false** | new-spec P3: cross-strike ReversalCluster state machine; EXIT≠REVERSE — shadow |
 | `EVENT_SELECT_ENABLED` | **false** | new-spec P4: pick the highest-event-information contract (not raw mass) — shadow |
 | `EVENT_SELECT_WINDOW` | 2 | P4: consider ATM ± this many strikes when event-selecting |

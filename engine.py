@@ -32,7 +32,11 @@ from analysis import events as ev
 from analysis import expiry
 from analysis import flow_response
 from analysis import hold
+from analysis import inventory
 from analysis import lifecycle as lc
+from analysis import packages
+from analysis import portfolio
+from analysis import qualified
 from analysis import mass
 from analysis import oi_confirm
 from analysis import replay
@@ -119,6 +123,11 @@ class AttentionEngine:
             self._surf_center.clear()
             self.state['entered_today'] = []       # NS: daily one-ENTER-per-side slots reset each session
             self.state['reversal'] = {}            # P3: reversal clusters are intraday — reset each session
+            # Addendum #1: inventory memory is CROSS-SESSION (a print's meaning depends on prior
+            # inventory) — keep records whose expiry is still alive, prune the rest.
+            if config.INVENTORY_ENABLED:
+                self.state['inventory'] = inventory.prune(
+                    self.state.get('inventory', {}), today, campaign_store.survives)
             # P1: carry surviving campaigns forward as inherited/overnight memory (prune expired),
             # instead of waking up fresh. The intraday microstructure above is correctly reset; the
             # campaign MEMORY persists so the engine manages yesterday's still-alive theses first.
@@ -193,6 +202,22 @@ class AttentionEngine:
             extension=extension, eff_decay=eff_decay, rel_premium=rel_premium, iv_slope=iv_slope,
             giveback=giveback, opp_accel_norm=opp_accel_norm, spot_confirms=True)
 
+    def _side_quality(self, sym, side, masses, tm, now):
+        """Per-side quality multiplier for qualified directional control: event SHAPE (class) × premium
+        ACCEPTANCE on the side's top-mass strike × FRESHNESS (abnormality z + acceleration). Returns
+        (quality, acceptance_label). Empty side → (0.0, None)."""
+        sk = masses['call_strikes'] if side == 'CALL' else masses['put_strikes']
+        if not sk:
+            return 0.0, None
+        topk = max(sk, key=sk.get)
+        acc = flow_response.premium_acceptance(
+            self.flow.contract_minute_vols(sym, topk, side, now),
+            self.flow.contract_marks(sym, topk, side, now))['label']
+        z = tm['call_z'] if side == 'CALL' else tm['put_z']
+        accel = tm['call_acceleration'] if side == 'CALL' else tm['put_acceleration']
+        cls = (masses['call'] if side == 'CALL' else masses['put'])['class']
+        return qualified.side_quality(cls, acc, z, accel), acc
+
     # ── Phase 1 / Follow-up P1: campaign-health read for stabilization + confidence ───
     def _campaign_health_by(self, ranked, metrics_by, cand, now) -> dict:
         """(ticker,side) -> structural-health read consumed by the wave stabilization (P1) and
@@ -258,10 +283,21 @@ class AttentionEngine:
             self_sustaining = lc.self_sustainability(vols, marks) >= config.ARCH_SELF_SUST_MIN
         else:
             progressing, dist_high, recovering = True, False, False
+        # Exit arbitration (new-spec 8/11): a raw control-flip is an INPUT to the ReversalCluster
+        # machine, not an independent exit command — so when reversal owns the opposite side, control
+        # loss no longer forces a PERSISTENT_CONTROL_TRANSFER confidence exit (the NVDA 6:37 / GOOGL
+        # 7:44 two-minute flips). And a STRENGTHENING same-side campaign suppresses control/opposite
+        # exits entirely (kills "STRENGTHENING + EXIT"). Own-side deterioration still exits.
+        strengthening = bool(recovering or self_sustaining)
+        if config.EXIT_ARBITRATION_ENABLED:
+            if config.REVERSAL_ENABLED or strengthening:
+                control_ok = True
+            if strengthening:
+                opp_strong = False
         return {'control_ok': control_ok, 'opp_strong': opp_strong, 'dist_high': dist_high,
                 'progressing': progressing, 'recovering': recovering,
                 'higher_low': higher_low, 'self_sustaining': self_sustaining,
-                'reaccelerating': recovering}
+                'reaccelerating': recovering, 'strengthening': strengthening}
 
     # ── the poll ────────────────────────────────────────────────────────────────
 
@@ -370,8 +406,22 @@ class AttentionEngine:
                 dom = None
             else:
                 dom = 'CALL' if masses['call_mass'] >= masses['put_mass'] else 'PUT'
+            # Qualified directional control: raw call-vs-put mass must not decide side control. Discount
+            # DISTRIBUTED / premium-REJECTING (heavy-volume-lower-lows) / stale flow before it counts, so
+            # a compact, premium-expanding opposite event can win (the NVDA 8/11 220C-vs-220P case).
+            qc = None
+            if config.QUALIFIED_CONTROL_ENABLED and dom:
+                call_q, call_acc = self._side_quality(sym, 'CALL', masses, tm, now)
+                put_q, put_acc = self._side_quality(sym, 'PUT', masses, tm, now)
+                qc = qualified.qualified_control(masses['call_mass'], masses['put_mass'], call_q, put_q)
+                if qc['dominant_side']:
+                    if qc['flipped_from_raw']:
+                        logger.info("QUALIFIED-CONTROL %s raw=%s → qualified=%s "
+                                    "(call q=%.2f/%s put q=%.2f/%s)", sym, dom, qc['dominant_side'],
+                                    call_q, call_acc, put_q, put_acc)
+                    dom = qc['dominant_side']
             metrics[sym] = {**tm, 'symbol': sym, 'dominant_side': dom, 'spot': sf['spot'],
-                            'call': masses['call'], 'put': masses['put']}
+                            'call': masses['call'], 'put': masses['put'], 'qualified_control': qc}
             if dom:
                 side_strikes = [d for (k, s), d in sf['strikes'].items() if s == dom]
                 # P2/P4: per-strike BarVolumeShock, computed once here and reused for the barshock
@@ -483,6 +533,35 @@ class AttentionEngine:
                     }
                     # Phase 2: EarlyAccumulationScore (research; logged, never gates alone).
                     cand[sym]['eas'] = campaign.early_accumulation_score(metrics[sym], cand[sym])
+                    # Addendum #1-4,7: inventory memory (cost-basis drift + MarginalFlowEfficiency;
+                    # HIGH ambiguity → abstain at entry) and the package/leg resolver (spread/roll
+                    # legs). Wrapped: a data-shape surprise here must never break the whole poll.
+                    try:
+                        if config.INVENTORY_ENABLED:
+                            exp = self._expiry.get(sym)
+                            exp_iso = exp.isoformat() if exp else 'x'
+                            ikey = inventory.contract_key(sym, dom, best['strike'], exp_iso)
+                            store = self.state.setdefault('inventory', {})
+                            rec = store.get(ikey)
+                            cand[sym]['inventory'] = inventory.assess(
+                                rec, current_price=best.get('mark'), new_size=best.get('fresh_vol') or 0)
+                            last = (rec or {}).get('last_ts')
+                            due = True
+                            if last:
+                                try:
+                                    due = (now - datetime.fromisoformat(last)).total_seconds() >= config.INV_OBSERVE_INTERVAL_S
+                                except Exception:
+                                    due = True
+                            if due and (best.get('fresh_vol') or 0) >= config.INV_EVENT_MIN_CONTRACTS:
+                                store[ikey] = inventory.observe(
+                                    rec, price=best.get('mark'), size=best.get('fresh_vol') or 0,
+                                    ts=now.isoformat(), spot=sf['spot'], iv=best.get('iv'))
+                        if config.PACKAGES_ENABLED:
+                            raw_vols = {(k, s): (d.get('fresh_vol') or 0)
+                                        for (k, s), d in sf['strikes'].items()}
+                            cand[sym]['package'] = packages.resolve(best['strike'], dom, raw_vols, sf['spot'])
+                    except Exception:
+                        logger.warning("%s: inventory/package read failed (non-fatal)", sym, exc_info=True)
                     # New-spec: Premium Acceptance — absorption vs rejection under heavy volume.
                     if config.ACCEPTANCE_ENABLED:
                         cand[sym]['acceptance'] = flow_response.premium_acceptance(minute_vols, marks)
@@ -588,6 +667,20 @@ class AttentionEngine:
             w = self.waves.waves.get((pos['symbol'], pos['side']))
             if w and w.confidence is not None and w.confidence < config.REINFORCE_MIN_CONF:
                 continue
+            # Addendum #3 — same-side flow after a successful event is NOT automatically reinforcement.
+            # If MarginalFlowEfficiency has gone weak (premium no longer advancing on the new flow), the
+            # original inventory is more likely being monetized into strength — suppress STRENGTHENING.
+            if config.INVENTORY_ENABLED:
+                ikey = inventory.contract_key(pos['symbol'], pos['side'], pos['strike'], pos.get('expiry'))
+                rec = self.state.get('inventory', {}).get(ikey)
+                mk = self._current_mark(pos)
+                if rec and mk is not None:
+                    mfe = inventory.marginal_flow_efficiency(rec, mk)
+                    if mfe <= config.INV_MFE_WEAK:
+                        logger.info("REINFORCE-SUPPRESSED %s %s — same-side flow but MFE=%.4f weak "
+                                    "(likely inventory distribution, not reinforcement)",
+                                    pos['symbol'], pos['side'], mfe)
+                        continue
             ctrl = m['call_control'] if pos['side'] == 'CALL' else m['put_control']
             strong = (m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z and ctrl >= config.WAVE_ACTIVE_CONTROL
                       and m.get('velocity', 0.0) > 0)
@@ -785,6 +878,29 @@ class AttentionEngine:
             if not bs_ok:
                 logger.info("ENTRY-REJECT %s %s barshock-gate=%s (no genuine event)", sym, side, bs_why)
                 return 'ECONOMICALLY_VALID_REJECTION'
+        # Addendum #1,10 — INVENTORY AMBIGUITY PASS (first-class abstain): a fresh print colliding with
+        # prior inventory at a materially different cost basis (probable unwind / distribution-into-
+        # strength) is high-ambiguity — passing is a feature, not a failure. HARD gate (both modes).
+        inv = c.get('inventory') or {}
+        if config.INVENTORY_ENABLED and config.INV_PASS_ON_HIGH and inv.get('ambiguity') == 'HIGH':
+            logger.info("ENTRY-ABSTAIN %s %s inventory ambiguity HIGH (%s, basis $%.2f mfe=%.4f) — PASS",
+                        sym, side, inv.get('state'), inv.get('basis_vwap') or 0.0, inv.get('mfe') or 0.0)
+            return 'INVENTORY_AMBIGUITY_PASS'
+        # Addendum #7 — PACKAGE LEG veto (default OFF; soft-discounts EV otherwise): a size-matched
+        # spread/roll leg is not clean outright directional flow.
+        pkg = c.get('package') or {}
+        if config.PACKAGES_ENABLED and config.PKG_VETO_ENABLED and pkg.get('leg'):
+            logger.info("ENTRY-REJECT %s %s package=%s (%s) — not clean outright flow",
+                        sym, side, pkg.get('label'), pkg.get('reason'))
+            return 'PACKAGE_LEG_REJECTION'
+        # Addendum #18 — PORTFOLIO correlation risk gate: campaign discovery is unconstrained, but a
+        # new correlated same-direction leg that would over-concentrate the (one-factor) Mag-7 book is
+        # a risk veto. HARD gate (both modes); never forces an exit or blocks holding.
+        if config.PORTFOLIO_RISK_ENABLED and config.PORT_GATE_ENABLED:
+            pg = portfolio.gate(side, self._held())
+            if not pg['ok']:
+                logger.info("ENTRY-REJECT %s %s portfolio-risk: %s", sym, side, pg['reason'])
+                return 'PORTFOLIO_CONCENTRATION_LIMIT'
         strict = config.OPENING_STRICT_MULT if is_opening_strict(now) else 1.0
         # §13 opening rework: instead of a blanket 1.4× penalty on every opening candidate, waive it
         # for a genuinely clean opening campaign — one that persists beyond the auction, shows a
@@ -898,6 +1014,18 @@ class AttentionEngine:
         cont = c.get('cont_prob', post)
         w_cont = config.EV_CONTINUATION_WEIGHT
         p_continue = (1.0 - w_cont) * post + w_cont * cont
+        # Addendum #1,7 — soft discount to P(continue): MED inventory ambiguity and a likely spread/roll
+        # leg both lower the odds this is a clean, self-sustaining directional campaign. (HIGH inventory
+        # already abstained above; PKG_VETO, when on, already rejected — this is the graduated case.)
+        pi_disc = 1.0
+        if config.INVENTORY_ENABLED:
+            pi_disc *= inv.get('discount', 1.0)
+        if config.PACKAGES_ENABLED:
+            pi_disc *= pkg.get('discount', 1.0)
+        if pi_disc < 1.0:
+            logger.info("ENTRY-DISCOUNT %s %s p_continue ×%.2f (inv=%s pkg=%s)", sym, side, pi_disc,
+                        inv.get('ambiguity'), pkg.get('label'))
+            p_continue *= pi_disc
         ev = campaign.expected_value(p_continue, remaining_convexity, p_false, config.EV_EXPECTED_LOSS)
         if not route_ok and config.REQUIRE_POSITIVE_EV and ev < config.EV_MIN:
             logger.info("ENTRY-REJECT %s %s negative EV=%.3f (post=%.2f conv=%.2f pF=%.2f)", sym, side,
@@ -970,6 +1098,9 @@ class AttentionEngine:
             'quality': c.get('quality'),
             'acceptance': (c.get('acceptance') or {}).get('label'),
             'barshock_event': (c.get('barshock') or {}).get('event_type'),
+            'inventory_state': (c.get('inventory') or {}).get('state'),
+            'inventory_ambiguity': (c.get('inventory') or {}).get('ambiguity'),
+            'package': (c.get('package') or {}).get('label'),
             'entry_score': m['attention_score'], 'entry_z': m['mass_z'],
             'entry_share': m['attention_share'], 'entry_rank': m['rank'],
             'entry_control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
@@ -1009,6 +1140,18 @@ class AttentionEngine:
             logger.info("  BARSHOCK %s %s top=%g@%s shock=%.1f rel=%.1f cluster=%d %s (sig=%s)", sym,
                         side, bs['top_strike'], bs['position'], bs['shock'], bs['rel_shock'],
                         bs['cluster'], bs['event_type'], bs['significant'])
+        if config.INVENTORY_ENABLED and inv:
+            logger.info("  INVENTORY %s %s %s ambiguity=%s basis=$%s mfe=%.4f — %s", sym, side,
+                        inv.get('state'), inv.get('ambiguity'),
+                        f"{inv.get('basis_vwap'):.2f}" if inv.get('basis_vwap') else '-',
+                        inv.get('mfe') or 0.0, inv.get('reason'))
+        if config.PACKAGES_ENABLED and pkg and pkg.get('label') != 'OUTRIGHT_LIKELY':
+            logger.info("  PACKAGE %s %s = %s (conf=%.2f) — %s", sym, side, pkg.get('label'),
+                        pkg.get('confidence') or 0.0, pkg.get('reason'))
+        if config.PORTFOLIO_RISK_ENABLED:
+            pex = portfolio.exposure(self._held())
+            logger.info("  PORTFOLIO after-entry: %d CALL / %d PUT campaigns, net Δ-notional $%s",
+                        pex['n_call'], pex['n_put'], f"{pex['net_delta_notional']:,}")
         notify.entry_card(self._board_ctx(ranked, market_mass), symbol=sym, side=side,
                           strike=best['strike'], expiry=expiry.isoformat(), qty=qty, price=limit,
                           row=self._board_ctx(ranked, market_mass)['by_symbol'][sym], spot=spot,

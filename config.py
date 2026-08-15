@@ -781,6 +781,27 @@ REV_ACTIVATE_CONTROL = float(os.getenv('REV_ACTIVATE_CONTROL', '0.66')) # opp co
 # ═══════════════════════════════════════════════════════════════════════════════
 BARSHOCK_ENABLED       = os.getenv('BARSHOCK_ENABLED', 'true').lower() == 'true'  # compute + log
 BARSHOCK_GATE_ENABLED  = os.getenv('BARSHOCK_GATE_ENABLED', 'false').lower() == 'true'  # VETO entries with no genuine event
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# QUALIFIED DIRECTIONAL CONTROL (new-spec 8/11 NVDA) + EXIT ARBITRATION
+# Side control from qualified (economically-intent) flow, not raw mass; and a single exit authority
+# where a raw control-flip is an INPUT to the reversal machine, not an independent exit command.
+# Both flag-gated (default OFF).
+# ═══════════════════════════════════════════════════════════════════════════════
+QUALIFIED_CONTROL_ENABLED = os.getenv('QUALIFIED_CONTROL_ENABLED', 'false').lower() == 'true'
+QC_DISTRIBUTED_FACTOR = float(os.getenv('QC_DISTRIBUTED_FACTOR', '0.35'))  # DISTRIBUTED shape discount
+QC_THIN_FACTOR        = float(os.getenv('QC_THIN_FACTOR', '0.60'))        # THIN / unclassified shape
+QC_REJECT_FACTOR      = float(os.getenv('QC_REJECT_FACTOR', '0.25'))      # premium REJECTION (bleed) discount
+QC_ABSORB_BOOST       = float(os.getenv('QC_ABSORB_BOOST', '1.15'))       # premium ABSORPTION boost
+QC_STALE_FACTOR       = float(os.getenv('QC_STALE_FACTOR', '0.70'))       # decelerating / stale side discount
+QC_Z_BOOST            = float(os.getenv('QC_Z_BOOST', '0.25'))            # fresh-abnormality lift weight
+QC_Z_REF              = float(os.getenv('QC_Z_REF', '3.0'))               # z that earns the full lift
+
+# Exit arbitration: when ON, a raw control-transfer no longer independently exits the incumbent — the
+# ReversalCluster machine owns opposite-side invalidation — and a STRENGTHENING same-side campaign
+# suppresses control/opposite exits entirely (kills the "STRENGTHENING + EXIT" contradiction). Own-side
+# deterioration (premium bleed / distribution / higher-low failure), hard stop, and EOD still exit.
+EXIT_ARBITRATION_ENABLED = os.getenv('EXIT_ARBITRATION_ENABLED', 'false').lower() == 'true'
 BARSHOCK_MIN_BINS      = int(os.getenv('BARSHOCK_MIN_BINS', '4'))       # min minute-bins for a baseline
 BARSHOCK_EPS           = float(os.getenv('BARSHOCK_EPS', '5.0'))        # dispersion floor (contracts)
 BARSHOCK_MIN_Z         = float(os.getenv('BARSHOCK_MIN_Z', '3.0'))      # robust-Z to be an event
@@ -805,6 +826,55 @@ ES_W_RELEVANCE = float(os.getenv('ES_W_RELEVANCE', '0.20'))
 ES_W_SPREAD    = float(os.getenv('ES_W_SPREAD', '0.15'))
 ES_W_LIQ       = float(os.getenv('ES_W_LIQ', '0.10'))
 ES_W_ROOM      = float(os.getenv('ES_W_ROOM', '0.10'))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #1-4,22 — INVENTORY MEMORY LAYER (cost-basis + hidden-exit + first-class PASS)
+# "A print has no meaning in isolation from the inventory history that preceded it." Per surviving
+# contract we remember prior significant prints (VWAP + size = a cost-basis zone). A same-side print
+# arriving far BELOW that basis is more likely liquidation/covering than fresh accumulation; one far
+# ABOVE the basis is distribution-into-strength; same-side flow that no longer advances premium (low
+# MarginalFlowEfficiency) is a likely hidden partial exit. HIGH inventory ambiguity ABSTAINS (a
+# first-class PASS), and weak MFE suppresses a false CAMPAIGN STRENGTHENING. Flag default ON (paper).
+# ═══════════════════════════════════════════════════════════════════════════════
+INVENTORY_ENABLED       = os.getenv('INVENTORY_ENABLED', 'true').lower() == 'true'
+INV_EVENT_MIN_CONTRACTS = int(os.getenv('INV_EVENT_MIN_CONTRACTS', '250'))    # a print big enough to remember
+INV_MAX_PRINTS          = int(os.getenv('INV_MAX_PRINTS', '40'))             # cap remembered prints per contract
+INV_OBSERVE_INTERVAL_S  = int(os.getenv('INV_OBSERVE_INTERVAL_S', '300'))    # min seconds between recorded prints per contract
+INV_BASIS_BELOW_PCT     = float(os.getenv('INV_BASIS_BELOW_PCT', '0.35'))     # new price this far below basis → ambiguous unwind
+INV_BASIS_ABOVE_PCT     = float(os.getenv('INV_BASIS_ABOVE_PCT', '0.50'))     # new price this far above basis → distribution-into-strength
+INV_MFE_WEAK            = float(os.getenv('INV_MFE_WEAK', '0.0'))             # marginal ΔP per unit new flow ≤ this = premium not advancing
+INV_HIGH_DISCOUNT       = float(os.getenv('INV_HIGH_DISCOUNT', '0.35'))       # qualified-mass multiplier at HIGH ambiguity
+INV_MED_DISCOUNT        = float(os.getenv('INV_MED_DISCOUNT', '0.70'))        # at MED ambiguity
+INV_PASS_ON_HIGH        = os.getenv('INV_PASS_ON_HIGH', 'true').lower() == 'true'  # HIGH ambiguity abstains from a NEW entry
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #7-8 — PACKAGE / LEG / ROLL RESOLVER
+# A fantastic single-strike print can be one leg of a vertical / calendar / roll / ratio. Within a
+# poll we search the surface for size-matched co-prints: an adjacent same-side size-match reads
+# VERTICAL_LIKELY, a same-strike call+put match STRADDLE/COMBO_LIKELY, a ~2:1 size ratio RATIO_LIKELY,
+# an equal opposite-expiry match ROLL/CALENDAR_LIKELY (when cross-expiry data is present). A traded
+# contract that looks like a spread leg is DISCOUNTED (not outright directional); PKG_VETO hard-rejects.
+# ═══════════════════════════════════════════════════════════════════════════════
+PACKAGES_ENABLED      = os.getenv('PACKAGES_ENABLED', 'true').lower() == 'true'
+PKG_SIZE_TOL          = float(os.getenv('PKG_SIZE_TOL', '0.25'))     # leg sizes within ±this fraction = size-matched
+PKG_MIN_LEG_CONTRACTS = int(os.getenv('PKG_MIN_LEG_CONTRACTS', '200'))  # a leg must be at least this big
+PKG_RATIO_LO          = float(os.getenv('PKG_RATIO_LO', '1.7'))      # size ratio in [lo,hi] → RATIO leg
+PKG_RATIO_HI          = float(os.getenv('PKG_RATIO_HI', '2.3'))
+PKG_NEIGHBOR_STRIKES  = int(os.getenv('PKG_NEIGHBOR_STRIKES', '2'))  # how many strikes away counts as an adjacent leg
+PKG_DISCOUNT          = float(os.getenv('PKG_DISCOUNT', '0.55'))     # qualified/quality discount when outright is doubtful
+PKG_VETO_ENABLED      = os.getenv('PKG_VETO_ENABLED', 'false').lower() == 'true'  # hard-veto entries on a strong non-outright package
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #18 — PORTFOLIO CORRELATION RISK LAYER (separate from signal discovery)
+# Campaign discovery stays unconstrained (multiple Mag-7 campaigns may coexist, safeguard #7). But the
+# Mag-7 are one correlated factor: four independent CALL campaigns is really one big long-Nasdaq bet.
+# This layer measures aggregate same-direction exposure and can VETO a new entry that would exceed the
+# correlated-exposure cap — a risk gate, never a discovery/hold constraint.
+# ═══════════════════════════════════════════════════════════════════════════════
+PORTFOLIO_RISK_ENABLED      = os.getenv('PORTFOLIO_RISK_ENABLED', 'true').lower() == 'true'
+PORT_GATE_ENABLED           = os.getenv('PORT_GATE_ENABLED', 'true').lower() == 'true'   # actually veto over-concentration
+PORT_MAX_CORR_SIDE          = int(os.getenv('PORT_MAX_CORR_SIDE', '4'))    # max concurrent same-direction correlated campaigns
+PORT_MAX_NET_DELTA_NOTIONAL = float(os.getenv('PORT_MAX_NET_DELTA_NOTIONAL', '0'))  # 0 = $ cap disabled; else cap |net Δ-notional|
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
