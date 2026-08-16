@@ -12,9 +12,15 @@ spreads. Set `ALPACA_ENABLED=false` to return to SHADOW (log only). Risk control
 sizing, one position at a time, −40% hard stop, EOD flatten.
 
 > **Authoritative runtime status — `.env` wins, not this doc.** The knob tables below show code
-> DEFAULTS; the *actual* loaded values are printed at every launch as a `RUNTIME CONFIG` log line
-> (and `EXIT DECISION OWNER = …`). As of **2026-08-06** the live paper `.env` has ALL behavior flags
-> **ON**. Four distinct statuses are tracked separately per feature:
+> DEFAULTS (many read **false** there); the *actual* loaded values come from `.env`, which overrides
+> them, and are printed at every launch as a `RUNTIME CONFIG` log line (and `EXIT DECISION OWNER = …`).
+> As of **2026-08-15** the live paper `.env` has ALL behavior flags **ON** — including the 8/15
+> additions: the inventory / package-roll / portfolio-risk layers *and* the rotation resolver,
+> expiry-value (late-0DTE + overnight carry), cross-expiry direction, multi-hypothesis (H1–H8),
+> data-quality/quote-sync, hedge-flow, premium-decomposition, regime, and campaign-end taxonomy
+> (see the two "Addendum subsystems" / "Final gap-closure" sections below). So wherever a per-feature
+> note or knob table says "default OFF / shadow / pending backtest", read that as the *code default and
+> original rollout intent* — the live paper run has it ON. Four distinct statuses per feature:
 >
 > | Feature | Implemented | Enabled (live .env) | Authoritative (owns a decision) | Validated (backtest/live edge) |
 > |---|:--:|:--:|:--:|:--:|
@@ -25,7 +31,20 @@ sizing, one position at a time, −40% hard stop, EOD flatten.
 > | Reinforcement lifecycle notes | ✅ | ✅ | n/a (notification only) | n/a |
 > | Strike-surface / cluster in entries | ✅ | ✅ | ✅ via route cluster notional + SURFACE_GATE | ❌ |
 > | Runner profit-management | ✅ | ✅ | ✅ (post-TP1) | ❌ |
-> | Multi-expiration scan | ✅ | ✅ | ❌ shadow/log only (no entry impact) | n/a |
+> | Multi-expiration scan + cross-expiry direction | ✅ | ✅ | ✅ forward-expiry agreement confirms/vetoes direction (#8) | ❌ |
+> | Qualified directional control (info > raw mass) | ✅ | ✅ | ✅ **re-derives side control** from qualified mass (NVDA 8/11) | ⚠️ dry-run only |
+> | Reversal cluster (EXIT≠REVERSE) | ✅ | ✅ | ✅ **owns opposite-side exits** | ❌ |
+> | Inventory memory + PASS (cost-basis/MFE) | ✅ | ✅ | ✅ HIGH-ambiguity abstains; MED discounts; suppresses false STRENGTHENING | ⚠️ dry-run only |
+> | Package / roll resolver | ✅ | ✅ | ◑ soft EV discount (hard veto OFF) | ❌ |
+> | Portfolio correlation-risk gate | ✅ | ✅ | ✅ vetoes over-concentration at entry | ⚠️ dry-run: non-binding |
+> | Rotation resolver | ✅ | ✅ | ◑ names destination on rotation exit (log) | ❌ |
+> | Late-0DTE value gate | ✅ | ✅ | ✅ vetoes theta-dominated late 0DTE | ❌ |
+> | Multi-hypothesis (H1–H8) | ✅ | ✅ | ◑ soft (PASS gate OFF) | ❌ |
+> | Data-quality / quote-sync | ✅ | ✅ | ✅ drops invalid snapshots; cuts stale-quote confidence | ❌ |
+> | Hedge-flow (directional vs convexity) | ✅ | ✅ | ◑ soft EV discount | ❌ |
+> | Premium decomposition (delta/gamma/IV) | ✅ | ✅ | n/a (feeds hedge + log) | n/a |
+> | Regime context | ✅ | ✅ | ◑ confidence modifier only | ❌ |
+> | Campaign end taxonomy | ✅ | ✅ | n/a (historical memory) | n/a |
 > | T+1 OI confirmation | ✅ | ❌ | ❌ needs Schwab OI (off) | n/a |
 >
 > **Allowed exits that bypass the hold engine (by design):** hard stop, EOD flatten, overwhelming
@@ -326,7 +345,14 @@ fresh with the on-disk code.
 
 ---
 
-## Next-architecture upgrades (built behind shadow flags, live behaviour frozen)
+## Next-architecture upgrades (built behind flags — NOW ALL ENABLED live on paper)
+
+> **Historical note:** the P1–P8 / follow-up descriptions below were written during the *shadow
+> rollout*, when each layer defaulted OFF pending backtest — that is why they say "default OFF /
+> pending backtest / shadow." As of **2026-08-15** every one of these flags is **ON** in the live
+> paper `.env` (see the authoritative status banner at the top). Read the per-layer "default OFF" notes
+> as code-default + rollout history, not the current runtime.
+
 
 A consolidated developer spec asked the engine to grow from an attention-wave detector into a
 **stateful, multi-expiration, multi-archetype institutional-campaign tracker**. That is being built
@@ -776,3 +802,18 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `REVERSAL_ENABLED` | **false** | new-spec P3: cross-strike ReversalCluster state machine; EXIT≠REVERSE — shadow |
 | `EVENT_SELECT_ENABLED` | **false** | new-spec P4: pick the highest-event-information contract (not raw mass) — shadow |
 | `EVENT_SELECT_WINDOW` | 2 | P4: consider ATM ± this many strikes when event-selecting |
+| *— addendum layers (all ON in `.env`; code defaults shown) —* | | |
+| `INVENTORY_ENABLED` / `INV_PASS_ON_HIGH` | true / true | #1-4: cost-basis + MFE; HIGH ambiguity → `INVENTORY_AMBIGUITY_PASS` |
+| `INV_EVENT_MIN_CONTRACTS` / `INV_OBSERVE_INTERVAL_S` | 250 / 300 | min print size remembered; min seconds between recorded prints |
+| `INV_DEPLETION_ENABLED` | true | #4: coarse remaining-inventory ladder FUNDED→PARTIAL→MAJORITY→CLOSED |
+| `PACKAGES_ENABLED` / `PKG_VETO_ENABLED` | true / **false** | #7: size-matched spread/roll legs → soft discount; hard veto OFF |
+| `PORTFOLIO_RISK_ENABLED` / `PORT_GATE_ENABLED` | true / true | #18: correlated-exposure gate (`PORT_MAX_CORR_SIDE`, default 4) |
+| `ROTATION_RESOLVER_ENABLED` | true | §23-24: name the rotation destination on a rotation exit |
+| `EXPIRY_VALUE_ENABLED` / `LATE0DTE_GATE_ENABLED` | true / true | §36: LateDay0DTEValue (theta ramp) vetoes weak late 0DTE; #6 overnight carry |
+| `CROSS_EXPIRY_DIR_ENABLED` | true | #8: forward-expiry control agreement confirms/vetoes direction |
+| `HYPOTHESES_ENABLED` / `HYP_PASS_ENABLED` | true / **false** | #9: H1–H8 distribution (soft); abstain-on-ambiguity gate OFF |
+| `DATA_QUALITY_ENABLED` / `DQ_DROP_ENABLED` | true / true | #11-12: validate OPRA snapshots; drop crossed/negative/no-mark; stale→low confidence |
+| `HEDGE_FLOW_ENABLED` | true | #13: directional vs convexity-demand confidence (soft discount) |
+| `DECOMPOSE_ENABLED` | true | #14: ΔP = delta·ΔS + ½·gamma·ΔS² + IV residual |
+| `REGIME_ENABLED` / `REGIME_EVENT_DATES` | true / (empty) | #17: macro/vol confidence modifier; fill CPI/FOMC/earnings/OpEx dates weekly |
+| `CAMPAIGN_TAXONOMY_ENABLED` | true | #21: end taxonomy (FAILED/REALIZED_PROFIT/ROLLED/…) stored at close |
