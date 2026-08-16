@@ -69,6 +69,28 @@ def carry_forward(campaigns, today) -> dict:
     return out
 
 
+def classify_end(reason, pnl=None, carried=False) -> str:
+    """Campaign END taxonomy (addendum #21) — an ended campaign is not one thing. Maps the exit reason
+    (+ realized P&L, + whether the contract was carried overnight) to a durable historical label:
+    FAILED / DISTRIBUTED / REALIZED_PROFIT / EXPIRED_PROFITABLY / ROLLED / CARRIED_OVERNIGHT / UNKNOWN."""
+    r = (reason or '').upper()
+    if carried:
+        return 'CARRIED_OVERNIGHT'
+    if 'REVERS' in r or 'ROLL' in r:
+        return 'ROLLED'
+    if 'STOP_LOSS' in r or 'INVALID' in r:
+        return 'FAILED'
+    if 'DISTRIBUTION' in r:
+        return 'DISTRIBUTED'
+    if r in ('EOD_FLATTEN',) and pnl is not None:
+        return 'EXPIRED_PROFITABLY' if pnl > 0 else 'FAILED'
+    if r in ('STRUCTURAL_TP1', 'STRUCTURAL_TP2', 'RUNNER_TRAIL', 'TRAIL_GIVEBACK') or (pnl is not None and pnl > 0):
+        return 'REALIZED_PROFIT'
+    if pnl is not None and pnl <= 0:
+        return 'FAILED'
+    return 'UNKNOWN'
+
+
 def opposite_inherited(campaigns, ticker, side):
     """An inherited, non-terminal campaign on the OPPOSITE side for this ticker (raises the entry
     bar for `side`), or None."""

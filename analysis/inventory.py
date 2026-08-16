@@ -114,6 +114,29 @@ def assess(rec, *, current_price, new_size=0.0) -> dict:
             'basis_size': b['size'], 'drift': round(drift, 3), 'reason': reason}
 
 
+def depletion(rec) -> dict:
+    """Coarse remaining-inventory estimate (addendum #4). Approximates how much of the position was
+    distributed near strength: the fraction of remembered volume printed >= INV_BASIS_ABOVE_PCT above
+    the contract's running low. Maps to FUNDED / PARTIAL_EXIT / MAJORITY_EXITED / LIKELY_CLOSED."""
+    prints = (rec or {}).get('prints') or []
+    total = sum(p['size'] for p in prints) or 0.0
+    if total <= 0:
+        return {'state': 'INVENTORY_UNKNOWN', 'remaining': 1.0, 'distributed': 0.0}
+    lo = min(p['price'] for p in prints) or 0.0
+    hi_gate = lo * (1.0 + config.INV_BASIS_ABOVE_PCT)
+    distributed = sum(p['size'] for p in prints if p['price'] >= hi_gate and p['price'] > lo)
+    frac = distributed / total
+    if frac >= config.INV_DEPLETE_CLOSED:
+        state = 'LIKELY_CLOSED'
+    elif frac >= config.INV_DEPLETE_MAJORITY:
+        state = 'MAJORITY_EXITED'
+    elif frac >= config.INV_DEPLETE_PARTIAL:
+        state = 'LIKELY_PARTIAL_EXIT'
+    else:
+        state = 'LIKELY_FUNDED'
+    return {'state': state, 'remaining': round(max(0.0, 1.0 - frac), 3), 'distributed': round(frac, 3)}
+
+
 def prune(store, today, survives_fn) -> dict:
     """Drop inventory records whose expiry is no longer alive today (same rule as campaign memory).
     `survives_fn(expiry, today)` is campaign_store.survives — passed in to avoid a circular import."""

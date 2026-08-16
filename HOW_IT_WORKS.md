@@ -489,10 +489,49 @@ checks). New entry-reject reasons: `INVENTORY_AMBIGUITY_PASS`, `PACKAGE_LEG_REJE
 > runner) **and** these three addendum subsystems are **ON** in `.env`. Execution is **Alpaca PAPER**
 > (`ALPACA_ENABLED=true`, `ALPACA_PAPER=true`) — simulated money, live paper forward-test.
 
-**Still not built (documented backlog):** OPRA trade-condition / quote-sync validation (#11-12),
-premium-move delta/gamma/vega decomposition (#14), the full multi-hypothesis H1–H8 engine (#9, only a
-single Bayesian posterior today), cross-expiry as a *directional* input (multi-expiry is still
-shadow/log), and negative-control / frozen-time regression harnesses (#15-16).
+### Final gap-closure — the remaining spec/addendum items (2026-08-15, ON for paper)
+
+The last partials and unbuilt items were implemented as pure, tested, flag-gated modules. All wired
+poll-safe (every candidate-side read is exception-guarded), default ON for the paper run; the two
+hard-gate *abstain* variants (hypotheses PASS, package veto) are left OFF to observe first.
+
+- **§23-24 Rotation resolver** (`rotation.py`) — on a rotation exit, name WHERE attention went
+  (Δattention + event shape + control) and log the destination for the entry engine to interrogate
+  the same poll, instead of the generic queue.
+- **§36 late-day 0DTE value + #6 overnight carry + #8 cross-expiry direction** (`expiry_value.py`) —
+  `LateDay0DTEValue = strength×activation×remaining_convexity − θ·theta_risk`, theta ramping through
+  the session so a weak late 0DTE is vetoed; forward-expiry control agreement now *confirms or vetoes*
+  a direction (was shadow-log); a restored overnight campaign is classified CONTINUATION /
+  OPENING_MONETIZATION / ROLL_FORWARD / REVERSAL before new discovery.
+- **#4 inventory depletion** (`inventory.depletion`) — coarse remaining-inventory ladder
+  FUNDED → PARTIAL_EXIT → MAJORITY_EXITED → LIKELY_CLOSED from distribution-near-strength evidence.
+- **#9 multi-hypothesis engine** (`hypotheses.py`) — competing H1–H8 (fresh directional / closing
+  profitable / closing losing / overwrite / roll / spread leg / hedge / unknown), evidence-weighted;
+  residual ambiguity can PASS (gate OFF for now, logged).
+- **#11-12 data quality / quote-sync** (`dataquality.py`) — validate every OPRA snapshot before event
+  detection; drop crossed/negative/no-mark; stale/wide quotes cut aggressor/acceptance confidence.
+- **#13 hedge flow** (`hedge.py`) — DirectionalConfidence vs ConvexityDemandConfidence; IV bid with
+  weak spot follow-through reads convexity and soft-discounts P(continue).
+- **#14 premium decomposition** (`decompose.py`) — ΔP ≈ delta·ΔS + ½·gamma·ΔS² + IV residual; tags a
+  move DELTA_DRIVEN vs IV_DRIVEN and feeds the hedge read.
+- **#17 regime context** (`regime.py`) — macro-event (config calendar) / high-vol confidence
+  *modifier*, never a hard gate.
+- **#21 campaign end taxonomy** (`campaign_store.classify_end`) — FAILED / DISTRIBUTED /
+  REALIZED_PROFIT / EXPIRED_PROFITABLY / ROLLED / CARRIED_OVERNIGHT / UNKNOWN, stored at close.
+- **§59 + #15/#16 regression harness** (`test_regression.py`) — the named cases (NVDA 8/11, TSLA
+  8/13, AAPL 307.5P, GOOGL 8/10, AMZN overnight) as **frozen-time** assertions through the pure
+  classifiers (no future price is ever an input — the #15 look-ahead guard), plus a **negative
+  control**: a look-alike event with identical morphology but opposite economics that the intent
+  reads (hypotheses + inventory) correctly reject.
+
+Tests: `test_rotation.py`, `test_expiry_value.py`, `test_hypotheses.py`, `test_dataquality.py`,
+`test_hedge.py`, `test_decompose.py`, `test_regime.py`, `test_campaign_taxonomy.py`,
+`test_regression.py` (+ inventory depletion). Full suite: **35/35 green.**
+
+**Genuinely deferred (needs external data / calibration, not architecture):** vega/theta greeks for a
+fuller decomposition (OPRA gives delta+gamma+IV only); an OPRA trade-condition/complex-order tape
+(snapshot feed has no condition codes — we validate what's observable); and populating
+`REGIME_EVENT_DATES` each week. These are data-availability limits, not missing logic.
 
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 

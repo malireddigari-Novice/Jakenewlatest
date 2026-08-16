@@ -27,16 +27,23 @@ from analysis import barshock
 from analysis import campaign
 from analysis import campaign_store
 from analysis import contract_select
+from analysis import dataquality
+from analysis import decompose
 from analysis import entry
 from analysis import events as ev
 from analysis import expiry
+from analysis import expiry_value
 from analysis import flow_response
+from analysis import hedge as hedgeflow
 from analysis import hold
+from analysis import hypotheses
 from analysis import inventory
 from analysis import lifecycle as lc
 from analysis import packages
 from analysis import portfolio
 from analysis import qualified
+from analysis import regime as regimemod
+from analysis import rotation
 from analysis import mass
 from analysis import oi_confirm
 from analysis import replay
@@ -75,6 +82,9 @@ class AttentionEngine:
         self._fwd_share: dict = {}         # Phase 3: sym -> last forward-share (migration slope)
         self._expiry_class: dict = {}      # Phase 3/4: sym -> last expiry structural classification
         self._surf_center: dict = {}       # Phase 5: (sym,side) -> last weighted strike center (momentum)
+        self._prev_scores: dict = {}       # §23: last poll's attention score per symbol (rotation velocity)
+        self._expiry_rows: dict = {}       # #8: last multi-expiry rows per symbol (cross-expiry direction)
+        self._dq: dict = {}                # #11-12: (sym) -> {contract: quote confidence 0..1}
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
 
@@ -166,6 +176,11 @@ class AttentionEngine:
     def _dte(self, sym):
         exp = self._expiry.get(sym)
         return (exp - today_cst()).days if exp else None
+
+    def _minutes_since_open(self, now) -> float:
+        """Minutes since the 08:30 CST cash open (for the §36 late-0DTE theta ramp)."""
+        open_t = now.replace(hour=8, minute=30, second=0, microsecond=0)
+        return max(0.0, (now - open_t).total_seconds() / 60.0)
 
     def _campaign_ctx(self, sym, now) -> dict:
         """Context for the Bayesian prior — morning bias (institutional campaigns often commit
@@ -346,6 +361,13 @@ class AttentionEngine:
                 self._close(pos, mark if mark is not None else pos['entry_price'], now,
                             reason=ex['reason'], board=self._board_ctx(ranked, market_mass),
                             metric=metrics_by.get(ex['ticker']))
+            # §23-24: a rotation exit should point the entry engine at WHERE attention went (this poll's
+            # ranked candidates are already evaluated below; this makes the destination explicit).
+            if config.ROTATION_RESOLVER_ENABLED and 'ROTATION' in (ex.get('reason') or ''):
+                dest = rotation.resolve(ex['ticker'], ranked, self._prev_scores, cand, metrics_by)
+                if dest.get('ticker'):
+                    logger.info("ROTATION-DEST after %s %s exit → investigate %s %s (%s)",
+                                ex['ticker'], ex['side'], dest['ticker'], dest['side'], dest['reason'])
         if is_past_entry_cutoff(now):
             if res['enter']:
                 logger.info("ENTRY-CUTOFF  %d wave(s) suppressed (within %dmin of EOD flatten)",
@@ -372,6 +394,8 @@ class AttentionEngine:
             self._log_reinforcement(metrics_by, now)
         if config.RESEARCH_ARCHIVE_ENABLED:
             self._archive_snapshot(ranked, metrics_by, cand, now)
+        # §23: remember this poll's attention scores for next poll's rotation-velocity read.
+        self._prev_scores = {r['symbol']: r['attention_score'] for r in ranked}
         state.save(self.state)
 
     def _ingest_all(self, now: datetime) -> list:
@@ -385,12 +409,37 @@ class AttentionEngine:
                 snaps = self.data.get_option_snapshots(sym, expiry, spot, config.PREMIUM_BAND_PCT)
                 if not snaps:
                     continue
+                # Addendum #11-12: validate the OPRA stream before it feeds event detection — drop
+                # crossed/negative/no-mark snapshots so a bad quote can't fabricate an "event".
+                if config.DATA_QUALITY_ENABLED:
+                    snaps = self._clean_snaps(sym, snaps, now)
+                    if not snaps:
+                        continue
                 self._snaps[sym], self._spot[sym], self._expiry[sym] = snaps, spot, expiry
                 self.flow.ingest(sym, snaps, spot, now)
                 measured.append(sym)
             except Exception:
                 logger.warning("%s: ingest failed", sym, exc_info=True)
         return measured
+
+    def _clean_snaps(self, sym, snaps, now) -> dict:
+        """Addendum #11-12 data-quality pass: drop structurally-invalid contract snapshots and stash a
+        per-contract quote confidence (used to discount aggressor/acceptance reads). Never fatal."""
+        out, dropped, self._dq[sym] = {}, 0, {}
+        for key, snap in snaps.items():
+            try:
+                v = dataquality.validate(snap, now)
+            except Exception:
+                out[key] = snap
+                continue
+            self._dq[sym][key] = v['confidence']
+            if v['drop']:
+                dropped += 1
+                continue
+            out[key] = snap
+        if dropped:
+            logger.info("DATA-QUALITY %s dropped %d/%d invalid snapshot(s)", sym, dropped, len(snaps))
+        return out
 
     # ── build per-ticker metrics (mass + abnormality + candidate contract) ───────
 
@@ -545,6 +594,8 @@ class AttentionEngine:
                             rec = store.get(ikey)
                             cand[sym]['inventory'] = inventory.assess(
                                 rec, current_price=best.get('mark'), new_size=best.get('fresh_vol') or 0)
+                            if config.INV_DEPLETION_ENABLED:
+                                cand[sym]['inventory']['depletion'] = inventory.depletion(rec)
                             last = (rec or {}).get('last_ts')
                             due = True
                             if last:
@@ -562,6 +613,30 @@ class AttentionEngine:
                             cand[sym]['package'] = packages.resolve(best['strike'], dom, raw_vols, sf['spot'])
                     except Exception:
                         logger.warning("%s: inventory/package read failed (non-fatal)", sym, exc_info=True)
+                    # Addendum #14/#13/#9: premium-move decomposition (delta/gamma/IV), hedge-flow
+                    # (directional vs convexity), and the competing-hypotheses distribution. All pure,
+                    # all wrapped — a greek/data gap degrades to a neutral read, never breaks the poll.
+                    try:
+                        gamma = ((self._snaps.get(sym) or {}).get((best['strike'], dom)) or {}).get('gamma')
+                        if config.DECOMPOSE_ENABLED:
+                            cand[sym]['decomp'] = decompose.decompose(
+                                prev_mark=mark_recent, mark=best.get('mark'), delta=dlt, gamma=gamma,
+                                spot_prev=sf.get('spot_prev'), spot=sf['spot'])
+                        if config.HEDGE_FLOW_ENABLED:
+                            cand[sym]['hedge'] = hedgeflow.assess(
+                                iv_slope=iv_slope, spot_confirms=spot_confirms,
+                                resp_event=resp_event, delta=dlt)
+                        if config.HYPOTHESES_ENABLED:
+                            acc_lbl = flow_response.premium_acceptance(minute_vols, marks)['label']
+                            invd = cand[sym].get('inventory') or {}
+                            cand[sym]['hypotheses'] = hypotheses.assess({
+                                'acceptance': acc_lbl, 'resp_event': resp_event, 'self_sust': self_sust,
+                                'inv_ambiguity': invd.get('ambiguity'), 'inv_state': invd.get('state'),
+                                'package': (cand[sym].get('package') or {}).get('label'),
+                                'hedge': (cand[sym].get('hedge') or {}).get('read'),
+                                'drift': cand[sym].get('rel_premium')})
+                    except Exception:
+                        logger.warning("%s: decompose/hedge/hypotheses read failed (non-fatal)", sym, exc_info=True)
                     # New-spec: Premium Acceptance — absorption vs rejection under heavy volume.
                     if config.ACCEPTANCE_ENABLED:
                         cand[sym]['acceptance'] = flow_response.premium_acceptance(minute_vols, marks)
@@ -646,6 +721,7 @@ class AttentionEngine:
                 summ = expiry.summarize(by_expiry, dte_by, self._fwd_share.get(sym))
                 self._fwd_share[sym] = summ['forward_share']
                 self._expiry_class[sym] = summ['classification']
+                self._expiry_rows[sym] = summ['rows']       # #8: cross-expiry directional input
                 parts = "  ".join(f"{r['key'][5:]}={100*r['share']:.0f}%{(r['side'] or '-')[0]}"
                                   for r in summ['rows'] if r['share'] >= 0.05)
                 logger.info("EXPIRY %s %s fwd=%.0f%% mig=%s | %s", sym, summ['classification'],
@@ -1014,18 +1090,47 @@ class AttentionEngine:
         cont = c.get('cont_prob', post)
         w_cont = config.EV_CONTINUATION_WEIGHT
         p_continue = (1.0 - w_cont) * post + w_cont * cont
-        # Addendum #1,7 — soft discount to P(continue): MED inventory ambiguity and a likely spread/roll
-        # leg both lower the odds this is a clean, self-sustaining directional campaign. (HIGH inventory
-        # already abstained above; PKG_VETO, when on, already rejected — this is the graduated case.)
+        # Graduated soft discounts to P(continue) from the economic-intent reads. Each is a MULTIPLIER
+        # (never a hard veto here — the hard abstains are above): MED inventory ambiguity / spread-roll
+        # leg (#1,7), convexity-dominant hedge flow (#13), cross-expiry conflict (#8), and macro/vol
+        # regime (#17). Cross-expiry AGREEMENT adds a small bonus.
+        hedge_r = c.get('hedge') or {}
+        hyp = c.get('hypotheses') or {}
+        xexp = (expiry_value.cross_expiry_direction(side, self._expiry_rows.get(sym))
+                if config.CROSS_EXPIRY_DIR_ENABLED else {'verdict': 'NEUTRAL', 'mult': 1.0, 'bonus': 0.0})
+        reg = (regimemod.assess(now.date()) if config.REGIME_ENABLED else {'regime': 'NORMAL', 'mult': 1.0})
         pi_disc = 1.0
         if config.INVENTORY_ENABLED:
             pi_disc *= inv.get('discount', 1.0)
         if config.PACKAGES_ENABLED:
             pi_disc *= pkg.get('discount', 1.0)
-        if pi_disc < 1.0:
-            logger.info("ENTRY-DISCOUNT %s %s p_continue ×%.2f (inv=%s pkg=%s)", sym, side, pi_disc,
-                        inv.get('ambiguity'), pkg.get('label'))
-            p_continue *= pi_disc
+        if config.HEDGE_FLOW_ENABLED:
+            pi_disc *= hedge_r.get('mult', 1.0)
+        if config.CROSS_EXPIRY_DIR_ENABLED:
+            pi_disc *= xexp.get('mult', 1.0)
+        if config.REGIME_ENABLED:
+            pi_disc *= reg.get('mult', 1.0)
+        p_continue = min(1.0, p_continue * pi_disc + (xexp.get('bonus', 0.0) if config.CROSS_EXPIRY_DIR_ENABLED else 0.0))
+        if pi_disc < 1.0 or xexp.get('bonus'):
+            logger.info("ENTRY-DISCOUNT %s %s p_continue×%.2f (inv=%s pkg=%s hedge=%s xexp=%s regime=%s)",
+                        sym, side, pi_disc, inv.get('ambiguity'), pkg.get('label'),
+                        hedge_r.get('read'), xexp.get('verdict'), reg.get('regime'))
+        # Addendum #9 — hypotheses PASS: if no hypothesis dominates (ambiguous intent), abstain. Default
+        # OFF (HYP_PASS_ENABLED) so Monday observes the distribution before it gates.
+        if config.HYPOTHESES_ENABLED and config.HYP_PASS_ENABLED and hyp.get('ambiguous'):
+            logger.info("ENTRY-ABSTAIN %s %s hypotheses ambiguous (%s) — PASS", sym, side, hyp.get('reason'))
+            return 'HYPOTHESIS_AMBIGUITY_PASS'
+        # §36 — late-day 0DTE value gate: strength × activation × remaining_convexity − theta_risk.
+        if config.EXPIRY_VALUE_ENABLED and config.LATE0DTE_GATE_ENABLED:
+            dte0 = self._dte(sym)
+            mins = self._minutes_since_open(now)
+            l0 = expiry_value.late_day_0dte_value(
+                dte0, mins, strength=post, activation=c.get('cont_prob', post),
+                remaining_convexity=remaining_convexity)
+            ok0, why0 = expiry_value.late_day_0dte_ok(l0)
+            if not route_ok and not ok0:
+                logger.info("ENTRY-REJECT %s %s %s", sym, side, why0)
+                return 'MISSED_DUE_TO_LATE_0DTE_THETA'
         ev = campaign.expected_value(p_continue, remaining_convexity, p_false, config.EV_EXPECTED_LOSS)
         if not route_ok and config.REQUIRE_POSITIVE_EV and ev < config.EV_MIN:
             logger.info("ENTRY-REJECT %s %s negative EV=%.3f (post=%.2f conv=%.2f pF=%.2f)", sym, side,
@@ -1100,7 +1205,12 @@ class AttentionEngine:
             'barshock_event': (c.get('barshock') or {}).get('event_type'),
             'inventory_state': (c.get('inventory') or {}).get('state'),
             'inventory_ambiguity': (c.get('inventory') or {}).get('ambiguity'),
+            'inventory_depletion': ((c.get('inventory') or {}).get('depletion') or {}).get('state'),
             'package': (c.get('package') or {}).get('label'),
+            'hedge_read': (c.get('hedge') or {}).get('read'),
+            'premium_driver': (c.get('decomp') or {}).get('driver'),
+            'hypothesis': (c.get('hypotheses') or {}).get('top'),
+            'hypothesis_p': (c.get('hypotheses') or {}).get('top_p'),
             'entry_score': m['attention_score'], 'entry_z': m['mass_z'],
             'entry_share': m['attention_share'], 'entry_rank': m['rank'],
             'entry_control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
@@ -1152,6 +1262,20 @@ class AttentionEngine:
             pex = portfolio.exposure(self._held())
             logger.info("  PORTFOLIO after-entry: %d CALL / %d PUT campaigns, net Δ-notional $%s",
                         pex['n_call'], pex['n_put'], f"{pex['net_delta_notional']:,}")
+        dec = c.get('decomp')
+        if config.DECOMPOSE_ENABLED and dec and dec.get('driver') != 'UNKNOWN':
+            logger.info("  DECOMP %s %s ΔP=%.3f driver=%s (delta=%.3f gamma=%.3f resid=%.3f)", sym, side,
+                        dec.get('dP') or 0.0, dec['driver'], dec.get('delta_contrib') or 0.0,
+                        dec.get('gamma_contrib') or 0.0, dec.get('residual') or 0.0)
+        hr = c.get('hedge')
+        if config.HEDGE_FLOW_ENABLED and hr and hr.get('read') != 'NEUTRAL':
+            logger.info("  HEDGE %s %s %s (dir=%.2f conv=%.2f) — %s", sym, side, hr['read'],
+                        hr.get('directional_conf') or 0.0, hr.get('convexity_conf') or 0.0, hr.get('reason'))
+        hy = c.get('hypotheses')
+        if config.HYPOTHESES_ENABLED and hy:
+            logger.info("  HYPOTHESES %s %s top=%s p=%.2f directional=%.2f%s", sym, side, hy.get('top'),
+                        hy.get('top_p') or 0.0, hy.get('directional_p') or 0.0,
+                        ' (AMBIGUOUS)' if hy.get('ambiguous') else '')
         notify.entry_card(self._board_ctx(ranked, market_mass), symbol=sym, side=side,
                           strike=best['strike'], expiry=expiry.isoformat(), qty=qty, price=limit,
                           row=self._board_ctx(ranked, market_mass)['by_symbol'][sym], spot=spot,
@@ -1219,6 +1343,9 @@ class AttentionEngine:
                 cid = None
             if cid in camps:
                 camps[cid]['state'] = 'COMPLETED' if reason in ('STRUCTURAL_TP2', 'RUNNER_TRAIL') else 'EXITED'
+                # Addendum #21 — durable end taxonomy (death vs completion) for historical memory.
+                if config.CAMPAIGN_TAXONOMY_ENABLED:
+                    camps[cid]['end_taxonomy'] = campaign_store.classify_end(reason, pnl=pnl, carried=False)
         self._sheet(lambda: self.sheets.log_trade_exit(pos, price=mark, reason=reason, pnl=pnl,
                                                        mode=mode, category=category, hold_s=hold_s,
                                                        mfe=mfe, mae=mae))

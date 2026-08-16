@@ -52,6 +52,16 @@ print("── sub-floor prints are not remembered ──")
 r = inv.observe(None, price=1.0, size=config.INV_EVENT_MIN_CONTRACTS - 1, ts='t')
 ck("sub-floor print ignored (no basis)", inv._basis(r)['vwap'] is None)
 
+print("── depletion model (#4) ──")
+fund = inv.observe(None, price=1.00, size=5000, ts='t0')      # all accumulated at the low
+ck("all near-low volume → LIKELY_FUNDED", inv.depletion(fund)['state'] == 'LIKELY_FUNDED')
+ck("funded → remaining ~1.0", inv.depletion(fund)['remaining'] >= 0.99)
+sold = inv.observe(fund, price=2.00, size=5000, ts='t1')      # half the volume printed up +100%
+dep = inv.depletion(sold)
+ck("large volume distributed high → not FUNDED", dep['state'] != 'LIKELY_FUNDED')
+ck("distributed fraction rises", dep['distributed'] >= config.INV_DEPLETE_PARTIAL)
+ck("no prints → INVENTORY_UNKNOWN", inv.depletion({'prints': []})['state'] == 'INVENTORY_UNKNOWN')
+
 print("── prune keeps live-expiry records ──")
 store = {inv.contract_key('NVDA', 'CALL', 220, '2026-08-14'): {'prints': []},
          inv.contract_key('NVDA', 'CALL', 220, '2020-01-01'): {'prints': []}}

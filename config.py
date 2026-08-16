@@ -876,6 +876,99 @@ PORT_GATE_ENABLED           = os.getenv('PORT_GATE_ENABLED', 'true').lower() == 
 PORT_MAX_CORR_SIDE          = int(os.getenv('PORT_MAX_CORR_SIDE', '4'))    # max concurrent same-direction correlated campaigns
 PORT_MAX_NET_DELTA_NOTIONAL = float(os.getenv('PORT_MAX_NET_DELTA_NOTIONAL', '0'))  # 0 = $ cap disabled; else cap |net Δ-notional|
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPEC §23-24 — ROTATION RESOLVER
+# When a position exits on attention rotation, don't fall back to the generic queue — ask WHERE the
+# attention went (Δattention + event shape + control) and hand the entry engine that destination to
+# interrogate this same poll. The jump alone never trades; it only directs investigation.
+# ═══════════════════════════════════════════════════════════════════════════════
+ROTATION_RESOLVER_ENABLED = os.getenv('ROTATION_RESOLVER_ENABLED', 'true').lower() == 'true'
+ROT_MIN_DELTA_SCORE       = float(os.getenv('ROT_MIN_DELTA_SCORE', '8.0'))   # min Δattention to count as a destination
+ROT_W_DELTA               = float(os.getenv('ROT_W_DELTA', '0.5'))
+ROT_W_SHAPE               = float(os.getenv('ROT_W_SHAPE', '0.3'))
+ROT_W_CONTROL             = float(os.getenv('ROT_W_CONTROL', '0.2'))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPEC §36 — LATE-DAY 0DTE VALUE  +  ADDENDUM #6/#8 — CROSS-EXPIRY DIRECTION + OVERNIGHT CARRY
+# A 0DTE at 10:00 and at 15:00 are different instruments. LateDay0DTEValue = strength × activation ×
+# remaining_convexity − theta_risk, with the bar rising as the session ages. Cross-expiry control
+# agreement CONFIRMS a direction (or vetoes it); a restored overnight campaign is classified into
+# CONTINUATION / OPENING_MONETIZATION / ROLL_FORWARD / REVERSAL before new discovery.
+# ═══════════════════════════════════════════════════════════════════════════════
+EXPIRY_VALUE_ENABLED   = os.getenv('EXPIRY_VALUE_ENABLED', 'true').lower() == 'true'
+LATE0DTE_GATE_ENABLED  = os.getenv('LATE0DTE_GATE_ENABLED', 'true').lower() == 'true'   # veto weak late 0DTE
+LATE0DTE_START_MIN     = int(os.getenv('LATE0DTE_START_MIN', '180'))   # minutes after open the theta-penalty ramps from 0
+LATE0DTE_MIN_VALUE     = float(os.getenv('LATE0DTE_MIN_VALUE', '0.15'))# LateDay0DTEValue below this vetoes a 0DTE entry
+LATE0DTE_THETA_WEIGHT  = float(os.getenv('LATE0DTE_THETA_WEIGHT', '0.6'))
+CROSS_EXPIRY_DIR_ENABLED = os.getenv('CROSS_EXPIRY_DIR_ENABLED', 'true').lower() == 'true'  # wire expiry control into direction
+XEXP_CONFIRM_BONUS     = float(os.getenv('XEXP_CONFIRM_BONUS', '0.05'))  # p_continue bump when forward expiries agree
+XEXP_CONFLICT_PENALTY  = float(os.getenv('XEXP_CONFLICT_PENALTY', '0.85'))# p_continue mult when forward expiries disagree
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #4 — INVENTORY DEPLETION MODEL (coarse remaining-inventory states)
+# From cumulative distribution evidence, estimate how much of the original position probably remains:
+# FUNDED → PARTIAL_EXIT → MAJORITY_EXITED → CLOSED. Coarse but better than ACTIVE/WEAKENING/ENDED.
+# ═══════════════════════════════════════════════════════════════════════════════
+INV_DEPLETION_ENABLED  = os.getenv('INV_DEPLETION_ENABLED', 'true').lower() == 'true'
+INV_DEPLETE_PARTIAL    = float(os.getenv('INV_DEPLETE_PARTIAL', '0.25'))   # cumulative distribution frac → PARTIAL_EXIT
+INV_DEPLETE_MAJORITY   = float(os.getenv('INV_DEPLETE_MAJORITY', '0.60'))  # → MAJORITY_EXITED
+INV_DEPLETE_CLOSED     = float(os.getenv('INV_DEPLETE_CLOSED', '0.85'))    # → LIKELY_CLOSED
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #9 — MULTI-HYPOTHESIS ENGINE (H1-H8, ambiguity persists until evidence resolves it)
+# Do not force every event into BUY/SELL. Maintain competing hypotheses (fresh directional / closing
+# profitable / closing losing / overwrite / roll / spread / hedge / unknown) and update from evidence.
+# High residual ambiguity (no hypothesis dominant) is itself a reason to PASS.
+# ═══════════════════════════════════════════════════════════════════════════════
+HYPOTHESES_ENABLED     = os.getenv('HYPOTHESES_ENABLED', 'true').lower() == 'true'
+HYP_PASS_ENABLED       = os.getenv('HYP_PASS_ENABLED', 'false').lower() == 'true'  # abstain when no hypothesis dominates (OFF: observe first)
+HYP_DOMINANT_MIN       = float(os.getenv('HYP_DOMINANT_MIN', '0.35'))  # top hypothesis prob below this = ambiguous (8-way split)
+HYP_DIRECTIONAL_MIN    = float(os.getenv('HYP_DIRECTIONAL_MIN', '0.45'))# P(fresh directional) needed to treat as clean directional
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #11-12 — DATA QUALITY / QUOTE SYNC (clean stream before event detection)
+# OPRA snapshots can be crossed/locked, zero/negative, stale, or show a volume correction. Validate
+# each contract snapshot; a bad snapshot is dropped from event detection, a stale quote reduces
+# aggressor/acceptance confidence. Default: validate + log; DROP behind a flag (conservative).
+# ═══════════════════════════════════════════════════════════════════════════════
+DATA_QUALITY_ENABLED   = os.getenv('DATA_QUALITY_ENABLED', 'true').lower() == 'true'
+DQ_DROP_ENABLED        = os.getenv('DQ_DROP_ENABLED', 'true').lower() == 'true'   # drop invalid snapshots from ingest
+DQ_MAX_SPREAD_PCT      = float(os.getenv('DQ_MAX_SPREAD_PCT', '0.80'))  # spread/mid above this = untrustworthy quote
+DQ_STALE_QUOTE_S       = float(os.getenv('DQ_STALE_QUOTE_S', '30'))     # quote_age above this = low aggressor confidence
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #13 — HEDGE FLOW (DirectionalConfidence vs ConvexityDemandConfidence)
+# Not every call buyer is bullish stock — some trade convexity/vol. When IV is being bid hard but the
+# directional/spot follow-through is weak, favour a convexity read and discount DIRECTIONAL confidence.
+# ═══════════════════════════════════════════════════════════════════════════════
+HEDGE_FLOW_ENABLED     = os.getenv('HEDGE_FLOW_ENABLED', 'true').lower() == 'true'
+HEDGE_DISCOUNT         = float(os.getenv('HEDGE_DISCOUNT', '0.80'))     # p_continue mult when convexity >> directional
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #14 — PREMIUM MOVE DECOMPOSITION (delta / gamma / IV residual)
+# ΔP ≈ delta·ΔS + ½·gamma·ΔS² + residual(vega·ΔIV − theta). A double from spot moving is a different
+# signal from a double driven by IV. Logged + feeds the hedge-flow read. Needs delta+gamma from OPRA.
+# ═══════════════════════════════════════════════════════════════════════════════
+DECOMPOSE_ENABLED      = os.getenv('DECOMPOSE_ENABLED', 'true').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #17 — REGIME CONTEXT (confidence MODIFIER, never a hard gate)
+# CPI/FOMC/earnings/OpEx and high-vol days change what opening clusters mean. Dates come from a config
+# calendar (REGIME_EVENT_DATES, comma-separated ISO dates); realized-vol proxy is passed in. Regime
+# only scales confidence — it never overrides pristine option information.
+# ═══════════════════════════════════════════════════════════════════════════════
+REGIME_ENABLED         = os.getenv('REGIME_ENABLED', 'true').lower() == 'true'
+REGIME_EVENT_DATES     = [d.strip() for d in os.getenv('REGIME_EVENT_DATES', '').split(',') if d.strip()]
+REGIME_EVENT_MULT      = float(os.getenv('REGIME_EVENT_MULT', '0.90'))  # macro-event day: slightly more cautious
+REGIME_HIGH_VOL_MULT   = float(os.getenv('REGIME_HIGH_VOL_MULT', '0.92'))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADDENDUM #21 — CAMPAIGN END TAXONOMY (death vs completion, for historical memory)
+# An ended campaign is not one thing: FAILED / DISTRIBUTED / REALIZED_PROFIT / EXPIRED_PROFITABLY /
+# ROLLED / CARRIED_OVERNIGHT / UNKNOWN. Stored on the serialized campaign at close.
+# ═══════════════════════════════════════════════════════════════════════════════
+CAMPAIGN_TAXONOMY_ENABLED = os.getenv('CAMPAIGN_TAXONOMY_ENABLED', 'true').lower() == 'true'
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')
