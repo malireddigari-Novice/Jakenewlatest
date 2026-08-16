@@ -43,38 +43,47 @@ def resolve(strike, side, vols_by_leg, spot, *, cross_expiry_vol=None) -> dict:
     Returns {label, confidence(0-1), leg, discount, reason}. leg=True means 'likely a spread leg'."""
     v0 = (vols_by_leg or {}).get((strike, side), 0) or 0
     if v0 < config.PKG_MIN_LEG_CONTRACTS:
-        return {'label': 'OUTRIGHT_LIKELY', 'confidence': 0.0, 'leg': False,
-                'discount': 1.0, 'reason': 'sub-floor leg — not resolvable'}
+        return _out({'OUTRIGHT': 1.0}, 'sub-floor leg — not resolvable')
     opp = 'PUT' if side == 'CALL' else 'CALL'
 
-    # Roll / calendar: same strike+side, size-matched, in a neighboring expiry.
+    # v3-review item 14: without complex-order condition codes a size/time-matched co-print is only a
+    # PROBABLE package (two similar clips can be coincidental in a liquid Mag-7 name). Emit PROBABILITIES
+    # and hard-veto only when the complex probability is overwhelming (engine: PKG_VETO_MIN_CONF).
+    p = {'OUTRIGHT': 0.0, 'ROLL': 0.0, 'CALENDAR': 0.0, 'STRADDLE': 0.0, 'VERTICAL': 0.0, 'RATIO': 0.0}
+
     if cross_expiry_vol:
         vx = cross_expiry_vol.get((strike, side), 0) or 0
         if _matched(v0, vx):
-            return {'label': 'ROLL_LIKELY', 'confidence': 0.7, 'leg': True,
-                    'discount': config.PKG_DISCOUNT,
-                    'reason': f'size-matched {v0:.0f}≈{vx:.0f} same strike in a neighboring expiry'}
-
-    # Straddle / combo: same strike, opposite side, size-matched.
+            p['ROLL'] += 0.7
     vp = (vols_by_leg or {}).get((strike, opp), 0) or 0
     if _matched(v0, vp):
-        return {'label': 'STRADDLE_COMBO_LIKELY', 'confidence': 0.6, 'leg': True,
-                'discount': config.PKG_DISCOUNT,
-                'reason': f'size-matched {v0:.0f}≈{vp:.0f} call+put on {strike:g} (volatility, not direction)'}
-
-    # Vertical / ratio: an adjacent same-side strike within PKG_NEIGHBOR_STRIKES.
+        p['STRADDLE'] += 0.6
     neighbors = sorted(((k, v) for (k, s), v in (vols_by_leg or {}).items()
                         if s == side and k != strike and v and v >= config.PKG_MIN_LEG_CONTRACTS),
                        key=lambda kv: abs(kv[0] - strike))
     for k, v in neighbors[:config.PKG_NEIGHBOR_STRIKES * 2]:
         if _matched(v0, v):
-            return {'label': 'VERTICAL_LIKELY', 'confidence': 0.55, 'leg': True,
-                    'discount': config.PKG_DISCOUNT,
-                    'reason': f'size-matched {v0:.0f}≈{v:.0f} adjacent same-side {strike:g}/{k:g} vertical'}
-        if _ratio(v0, v) or _ratio(v, v0):
-            return {'label': 'RATIO_LIKELY', 'confidence': 0.45, 'leg': True,
-                    'discount': config.PKG_DISCOUNT,
-                    'reason': f'~{max(v0, v)/max(1, min(v0, v)):.1f}:1 size ratio {strike:g}/{k:g} — ratio spread'}
+            p['VERTICAL'] = max(p['VERTICAL'], 0.55)
+        elif _ratio(v0, v) or _ratio(v, v0):
+            p['RATIO'] = max(p['RATIO'], 0.45)
+    complex_prob = min(1.0, p['ROLL'] + p['STRADDLE'] + p['VERTICAL'] + p['RATIO'])
+    p['OUTRIGHT'] = round(1.0 - complex_prob, 3)
+    top = max((k for k in p if k != 'OUTRIGHT'), key=lambda k: p[k])
+    if complex_prob <= 0:
+        return _out({'OUTRIGHT': 1.0}, 'no size-matched co-print — reads outright')
+    label = {'ROLL': 'ROLL_LIKELY', 'STRADDLE': 'STRADDLE_COMBO_LIKELY',
+             'VERTICAL': 'VERTICAL_LIKELY', 'RATIO': 'RATIO_LIKELY',
+             'CALENDAR': 'CALENDAR_LIKELY'}[top]
+    # discount scales with how confident we are it is NOT outright
+    disc = 1.0 - (1.0 - config.PKG_DISCOUNT) * complex_prob
+    return {'label': label, 'confidence': round(complex_prob, 3), 'complex_prob': round(complex_prob, 3),
+            'probs': {k: round(v, 3) for k, v in p.items()},
+            'leg': complex_prob >= config.PKG_VETO_MIN_CONF, 'discount': round(disc, 3),
+            'reason': f'{label} p={complex_prob:.2f} (outright {p["OUTRIGHT"]:.2f}) — probabilistic, no condition codes'}
 
-    return {'label': 'OUTRIGHT_LIKELY', 'confidence': 0.0, 'leg': False,
-            'discount': 1.0, 'reason': 'no size-matched co-print — reads outright'}
+
+def _out(probs, reason):
+    full = {'OUTRIGHT': 0.0, 'ROLL': 0.0, 'CALENDAR': 0.0, 'STRADDLE': 0.0, 'VERTICAL': 0.0, 'RATIO': 0.0}
+    full.update(probs)
+    return {'label': 'OUTRIGHT_LIKELY', 'confidence': 0.0, 'complex_prob': 0.0, 'probs': full,
+            'leg': False, 'discount': 1.0, 'reason': reason}

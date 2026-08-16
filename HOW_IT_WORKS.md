@@ -559,6 +559,47 @@ fuller decomposition (OPRA gives delta+gamma+IV only); an OPRA trade-condition/c
 (snapshot feed has no condition codes — we validate what's observable); and populating
 `REGIME_EVENT_DATES` each week. These are data-availability limits, not missing logic.
 
+### v3 architecture review — integration corrections (2026-08-16)
+
+A full review against the NVDA/TSLA/AAPL/GOOGL/META/AMZN + overnight-inventory studies found the
+danger was mostly *integration*, not missing subsystems: legacy assumptions still coexisted with the
+new architecture and could recreate old failures. Corrections (all tested; wired unless noted):
+
+- **Items 1-2 — the winner-take-all tournament is gone.** `MAX_PRIMARY_POSITIONS` was **1**; now
+  `MULTI_CAMPAIGN_ENABLED` with cap **4**. A held incumbent no longer blocks an independent
+  challenger — the slot cap + the portfolio-correlation gate govern concurrency. Attention rank is
+  discovery, not eligibility (routes already allow rank ≤ 3).
+- **Item 13 — one canonical exit path.** A raw overwhelming control flip no longer flattens a
+  position (`RAW_FLIP_EXIT_DISABLED` when `REVERSAL_ENABLED`): the ReversalCluster machine owns all
+  non-risk opposite-side exits. Only hard risk / EOD / profit / a *qualified* reversal can exit.
+- **Item 9 — volume senior to price.** An exceptional FORMING event (posterior ≥
+  `FORMING_SPOT_EXEMPT_POSTERIOR`) is no longer spot-gated (the NVDA 222.5P case); weak FORMING events
+  still require spot confirmation.
+- **Item 5 — inventory micro-distribution** (`inventory.micro_distribution`): cumulative small-clip
+  unwind detection that does **not** need a ≥250 print — catches the slow hidden exit (1,000 accrued,
+  then 100-lots into strength). Suppresses false CAMPAIGN STRENGTHENING.
+- **Item 4 — ContractValueMemory** (`value_memory.py`): state-adjusted historical value; cheapness vs
+  a **robust percentile** of real marks, not the corruptible session low. Overrides the crude
+  `mark ≤ 1.5× session-low` reject when the robust value is genuinely cheap.
+- **Item 14 — packages are probabilistic.** No complex-order tape exists, so size/time-matched legs
+  emit probabilities; the hard veto fires only when complex prob ≥ `PKG_VETO_MIN_CONF` (0.75),
+  otherwise a graduated EV discount — so a clean standalone isn't suppressed by a coincidence.
+- **Item 15 — InformationMass** parallel to premium mass (`mass.compute_masses` → `ticker_info`;
+  `discovery_share` blend): a cheap clean-convexity event isn't buried by expensive deep-ITM inventory.
+- **Item 10 — ExpirySelector** (`expiry_selector.py`, **shadow**): ranks 0DTE/1DTE/next/weekly for the
+  campaign; logs the recommendation (execution still nearest-expiry until wired).
+- **Item 12 — continuous attention transfer**: a destination accelerating while another cools is a
+  PRIORITY-INVESTIGATE signal every poll, not only on an exit.
+- **Item 17 — Decision Ledger** (`decision_ledger.py` → `jakenew_decisions.jsonl`): one immutable
+  record per near-candidate poll with full state, decision, owner, and **every** hard veto (not just
+  the first) + code/config provenance. The tool for diagnosing false negatives without serial fixes.
+- **Verified already-correct (locked with regression tests):** #8 fresh volume is a cumulative-day
+  delta, so a forming minute is never multiply-counted; #6 a dominant standalone classifies as
+  `SHOCK_ACCUMULATION` and is entry-eligible.
+- **Item 7 — time-of-day BarVolumeShock** (`barshock.session_phase` / `bar_shock_tod`): built + tested
+  but **not wired** — its baseline needs multi-session history to be useful, so wiring it adds risk for
+  zero day-one benefit; deferred deliberately.
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

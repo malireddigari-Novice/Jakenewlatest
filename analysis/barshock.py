@@ -17,6 +17,48 @@ NEW information relative to its OWN normal behavior and its neighbors?
 import config
 
 
+def session_phase(minutes_since_open) -> str:
+    """Session-phase bucket for time-of-day normalization (v3-review item 7). Option flow has enormous
+    intraday seasonality — a 9:31 minute is not comparable to 11:47."""
+    if minutes_since_open is None:
+        return 'MID'
+    if minutes_since_open < 15:
+        return 'OPEN'
+    if minutes_since_open < 90:
+        return 'MID_MORNING'
+    if minutes_since_open < 240:
+        return 'MIDDAY'
+    if minutes_since_open < 375:
+        return 'AFTERNOON'
+    return 'CLOSE'
+
+
+def bar_shock_tod(minute_vols, mark=None, phase_baseline=None) -> dict:
+    """Time-of-day-aware BarVolumeShock (item 7). Same robust shock as `bar_shock`, but when a
+    historical baseline for THIS contract at THIS session phase is supplied (a list of prior same-phase
+    per-minute volumes, accumulated across sessions), the current minute is ALSO judged against that
+    phase-normal median — so an opening burst is compared with normal opens, not with the short rolling
+    window that a fresh session hasn't filled yet. Returns bar_shock() plus tod_shock / phase fields."""
+    base = bar_shock(minute_vols, mark)
+    v = [float(x) for x in (minute_vols or []) if x is not None and x >= 0]
+    cur = v[-1] if v else 0
+    hist = sorted(float(x) for x in (phase_baseline or []) if x is not None and x >= 0)
+    if len(hist) >= config.BARSHOCK_MIN_BINS:
+        n = len(hist)
+        med = hist[n // 2]
+        mad = sorted(abs(x - med) for x in hist)[n // 2]
+        disp = 1.4826 * mad + config.BARSHOCK_EPS
+        tod_shock = round((cur - med) / disp, 2)
+    else:
+        tod_shock = None                              # not enough same-phase history yet
+    base['tod_shock'] = tod_shock
+    base['tod_baseline_n'] = len(hist)
+    # the effective shock is the MORE conservative of rolling vs time-of-day (an opening spike that is
+    # normal FOR THE OPEN should not read as a huge event just because the rolling window is short).
+    base['effective_shock'] = base['shock'] if tod_shock is None else min(base['shock'], tod_shock)
+    return base
+
+
 def bar_shock(minute_vols, mark=None) -> dict:
     """Robust one-minute volume shock for one contract from its trailing per-minute series."""
     v = [float(x) for x in (minute_vols or []) if x is not None and x >= 0]

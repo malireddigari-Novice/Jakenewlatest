@@ -58,5 +58,19 @@ ck("sub-floor (not significant) event → veto", (not ok) and why == 'SUBTHRESHO
 ok, why = bs.entry_gate(None)
 ck("missing barshock data → allow (no veto on absent evidence)", ok and why == 'NO_BARSHOCK_DATA')
 
+print("── time-of-day normalization (#7) ──")
+ck("session_phase: open", bs.session_phase(5) == 'OPEN')
+ck("session_phase: midday", bs.session_phase(150) == 'MIDDAY')
+# An opening spike that is NORMAL for the open should read tamer once judged vs same-phase history.
+series = [20, 30, 25, 1000]                       # rolling window sees a huge jump (short history)
+open_hist = [900, 1100, 1000, 950, 1050, 1000]    # but 1,000 is normal AT THE OPEN for this contract
+tod = bs.bar_shock_tod(series, mark=2.5, phase_baseline=open_hist)
+ck("tod_shock computed from same-phase history", tod['tod_shock'] is not None)
+ck("effective shock is the more conservative (open spike is normal for the open)",
+   tod['effective_shock'] <= tod['shock'])
+# with no phase history yet, effective shock falls back to the rolling shock
+tod2 = bs.bar_shock_tod(series, mark=2.5, phase_baseline=[])
+ck("no phase history → effective == rolling shock", tod2['effective_shock'] == tod2['shock'])
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

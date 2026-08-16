@@ -240,7 +240,12 @@ class WaveEngine:
             w = self.waves.get((t, side))
             reason = None
             min_hold_s = config.dte_timing(w.dte)['min_hold_s'] if w else config.WAVE_MIN_HOLD_SECONDS
-            if m and self._overwhelming_flip(m, side):
+            # v3-review item 13/20: when REVERSAL_ENABLED, the ReversalCluster machine (engine.
+            # _manage_reversal) owns ALL non-risk opposite-side exits. A raw control ratio may NOT
+            # independently flatten a position here — only a qualified reversal event, hard risk, EOD,
+            # or profit management. This kills the "raw flip round-trip" the review flagged.
+            raw_flip_ok = not (config.RAW_FLIP_EXIT_DISABLED and config.REVERSAL_ENABLED)
+            if m and raw_flip_ok and self._overwhelming_flip(m, side):
                 reason = 'CONTROL_FLIP_OVERWHELMING'
             elif w and w.active_ts is not None and _mins(now, w.active_ts) * 60 < min_hold_s:
                 reason = None                                   # protect the young wave from noise
@@ -291,9 +296,14 @@ class WaveEngine:
                     continue
                 if (t, side) in held:
                     continue
-                # incumbent still holding and not rotating out → challenger must wait (hysteresis)
-                if held and t not in exiting and not (rot and rot['ticker'] == t and rot['confirmed']):
-                    continue
+                # v3-review items 1-2: multiple independent Mag-7 campaigns may coexist. Under
+                # MULTI_CAMPAIGN a held incumbent no longer blocks an independent challenger — the slot
+                # cap (MAX_PRIMARY_POSITIONS) and the per-candidate portfolio-correlation gate govern
+                # concurrency instead of a winner-take-all tournament. (Legacy single-slot behaviour is
+                # preserved when MULTI_CAMPAIGN is off: incumbent blocks unless it is rotating out.)
+                if not config.MULTI_CAMPAIGN_ENABLED:
+                    if held and t not in exiting and not (rot and rot['ticker'] == t and rot['confirmed']):
+                        continue
                 # Rank/lead requirement. Under ENTRY_ROUTES, absolute campaign quality can qualify a
                 # NON-leader (the MSFT 495C false-negative): propose any top-ROUTE_MAX_RANK candidate
                 # and let _open_wave's route asymmetry score + hard vetoes be the real gate. Otherwise

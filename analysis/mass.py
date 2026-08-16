@@ -34,23 +34,29 @@ def compute_masses(strikes: dict, spot: float) -> dict:
     """
     call, put = {}, {}
     call_dan = put_dan = 0.0        # delta-adjusted notional = contracts · price · 100 · |delta|
+    call_info = put_info = 0.0      # v3-review #15: PRICE-INDEPENDENT participation (contracts · relevance)
     for (k, side), d in strikes.items():
         fv = d.get('fresh_vol') or 0
         mark = d.get('mark')
         if fv <= 0 or not mark or mark <= 0:
             continue
-        m = fv * float(mark) * 100.0 * relevance_weight(k, spot)
+        w = relevance_weight(k, spot)
+        m = fv * float(mark) * 100.0 * w
         (call if side == 'CALL' else put)[k] = (call if side == 'CALL' else put).get(k, 0.0) + m
         dlt = d.get('delta')
         dan = fv * float(mark) * 100.0 * (abs(float(dlt)) if dlt is not None else 1.0)
+        info = fv * w                                   # contracts, not dollars — a cheap ATM event counts
         if side == 'CALL':
-            call_dan += dan
+            call_dan += dan; call_info += info
         else:
-            put_dan += dan
+            put_dan += dan; put_info += info
     call_mass, put_mass = sum(call.values()), sum(put.values())
     return {
         'call_mass': call_mass, 'put_mass': put_mass, 'ticker_mass': call_mass + put_mass,
         'call_dan': call_dan, 'put_dan': put_dan, 'ticker_dan': call_dan + put_dan,
+        # InformationMass (#15): capital magnitude and information content are different dimensions —
+        # kept parallel so an expensive deep-ITM pool cannot bury a cleaner cheap-convexity event.
+        'call_info': call_info, 'put_info': put_info, 'ticker_info': call_info + put_info,
         'call_strikes': call, 'put_strikes': put,
         'call': _side_quality(call), 'put': _side_quality(put),
     }

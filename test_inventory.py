@@ -62,6 +62,17 @@ ck("large volume distributed high → not FUNDED", dep['state'] != 'LIKELY_FUNDE
 ck("distributed fraction rises", dep['distributed'] >= config.INV_DEPLETE_PARTIAL)
 ck("no prints → INVENTORY_UNKNOWN", inv.depletion({'prints': []})['state'] == 'INVENTORY_UNKNOWN')
 
+print("── micro-distribution (#5): small clips into strength, no ≥250 print needed ──")
+# premium rose to a peak then sits near highs while modest volume keeps trading (quiet unwind)
+marks_up = [1.0, 1.5, 2.5, 4.0, 5.0, 4.9, 4.95, 4.9, 4.92, 4.88]
+small_clips = [1000, 0, 0, 0, 0, 120, 110, 130, 100, 115]     # clips of ~100 well under the 250 floor
+md = inv.micro_distribution(small_clips, marks_up, est_campaign_vol=1000)
+ck("chunked micro-distribution detected without any ≥250 clip", md['chunked'])
+ck("state is LIKELY_DISTRIBUTING_IN_CHUNKS", md['state'] == 'LIKELY_DISTRIBUTING_IN_CHUNKS')
+quiet_hold = [1000, 0, 0, 0, 0, 0, 0, 0, 0, 0]                 # no post-peak volume = self-sustaining, not exit
+md2 = inv.micro_distribution(quiet_hold, marks_up, est_campaign_vol=1000)
+ck("no post-peak clips → not chunked (self-sustaining is not distribution)", not md2['chunked'])
+
 print("── prune keeps live-expiry records ──")
 store = {inv.contract_key('NVDA', 'CALL', 220, '2026-08-14'): {'prints': []},
          inv.contract_key('NVDA', 'CALL', 220, '2020-01-01'): {'prints': []}}

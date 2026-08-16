@@ -13,6 +13,7 @@ from analysis.waves import WaveEngine
 # these themselves around their own checks.
 config.STABILIZE_ENABLED = False
 config.CAMPAIGN_CONFIDENCE_ENABLED = False
+config.RAW_FLIP_EXIT_DISABLED = False   # legacy raw-flip path is exercised in isolation below
 
 fails = 0
 def ck(name, cond):
@@ -93,6 +94,18 @@ ov = flip('NVDA', 0.8, 6.0)
 ro = we_o.evaluate([ov], {'NVDA': ov}, {('NVDA', 'CALL')}, to + 60)      # young wave (60s)
 ck("overwhelming flip bypasses min-hold → immediate exit",
    any(e['reason'] == 'CONTROL_FLIP_OVERWHELMING' for e in ro['exit']))
+
+# v3-review item 13: when the ReversalCluster owns opposite-side exits, a RAW overwhelming flip must
+# NOT independently flatten the position (that recreated the round-trip failures). Same setup, gate on.
+config.RAW_FLIP_EXIT_DISABLED = True
+config.REVERSAL_ENABLED = True
+we_r = WaveEngine(); we_r.new_session()
+we_r.evaluate([metric('NVDA')], {'NVDA': metric('NVDA')}, set(), to)
+we_r.waves[('NVDA', 'CALL')].entry_issued = True
+rr = we_r.evaluate([ov], {'NVDA': ov}, {('NVDA', 'CALL')}, to + 60)
+ck("raw overwhelming flip does NOT exit when reversal owns opposite exits (item 13)",
+   not any(e['reason'] == 'CONTROL_FLIP_OVERWHELMING' for e in rr['exit']))
+config.RAW_FLIP_EXIT_DISABLED = False   # restore for the remaining legacy-path checks
 
 # MODERATE persistent transfer: protected during min-hold, then exits after 2 confirmations.
 we_p = WaveEngine(); we_p.new_session(); tp = 6000.0

@@ -97,5 +97,22 @@ ck("look-alike inventory collision → HIGH ambiguity (PASS)", la_inv['ambiguity
 ck("winner fresh print → LOW ambiguity (tradeable)",
    inv.assess(None, current_price=1.0, new_size=1000)['ambiguity'] == 'LOW')
 
+# ── POLLING DOUBLE-COUNT INVARIANT (#8) — a forming 1-min bar is one event, not four ───
+print("── item #8: 5s polls of a forming minute must not multiply-count ──")
+from datetime import datetime, timedelta, timezone
+from analysis.flow import FlowTracker
+ft = FlowTracker()
+t0 = datetime(2026, 8, 16, 14, 30, 0, tzinfo=timezone.utc)
+ft.new_session(t0.date())
+# cumulative day volume climbs 300→500→800→1100 across four 5-second polls inside ONE minute
+for i, cumvol in enumerate([300, 500, 800, 1100]):
+    ts = t0 + timedelta(seconds=5 * i)
+    ft.ingest('NVDA', {(220.0, 'CALL'): {'volume': cumvol, 'mark': 1.0, 'bid': 0.98, 'ask': 1.02}}, 220.0, ts)
+mv = ft.contract_minute_vols('NVDA', 220.0, 'CALL', t0 + timedelta(seconds=20))
+total = sum(mv)
+ck("minute fresh volume ~ the cumulative DELTA (≤ ~800), not the 2,700 sum of reads",
+   total <= 1000)          # 1100-300=800 is the true fresh; the naive sum (2700) would fail this
+ck("fresh volume is non-negative", all(x >= 0 for x in mv))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

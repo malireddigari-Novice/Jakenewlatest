@@ -28,8 +28,11 @@ from analysis import campaign
 from analysis import campaign_store
 from analysis import contract_select
 from analysis import dataquality
+from analysis import decision_ledger
 from analysis import decompose
 from analysis import entry
+from analysis import expiry_selector
+from analysis import value_memory
 from analysis import events as ev
 from analysis import expiry
 from analysis import expiry_value
@@ -85,6 +88,7 @@ class AttentionEngine:
         self._prev_scores: dict = {}       # §23: last poll's attention score per symbol (rotation velocity)
         self._expiry_rows: dict = {}       # #8: last multi-expiry rows per symbol (cross-expiry direction)
         self._dq: dict = {}                # #11-12: (sym) -> {contract: quote confidence 0..1}
+        self._code_version, self._config_hash = self._provenance()   # item 17: ledger stamps
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
 
@@ -94,6 +98,27 @@ class AttentionEngine:
         if config.CROSS_SESSION_MEMORY_ENABLED and self.state.get('day'):
             self._hist['date'] = date.fromisoformat(self.state['day'])
         self._reconcile_positions()
+
+    def _provenance(self):
+        """(code_version, config_hash) for the Decision Ledger — so a record is tied to exactly what
+        was executing. code_version from .git/HEAD (best-effort); config_hash over behavior flags."""
+        import hashlib
+        cv = None
+        try:
+            head = open('.git/HEAD').read().strip()
+            if head.startswith('ref:'):
+                cv = open('.git/' + head.split(' ', 1)[1]).read().strip()[:12]
+            else:
+                cv = head[:12]
+        except Exception:
+            cv = None
+        try:
+            flags = sorted(k for k in dir(config) if k.endswith('_ENABLED'))
+            blob = ';'.join(f'{k}={getattr(config, k)}' for k in flags)
+            ch = hashlib.sha1(blob.encode()).hexdigest()[:10]
+        except Exception:
+            ch = None
+        return cv, ch
 
     def _init_sheets(self):
         """Connect the Google Sheets trade log (ported from Jakevolume). Never fatal — a missing
@@ -138,6 +163,10 @@ class AttentionEngine:
             if config.INVENTORY_ENABLED:
                 self.state['inventory'] = inventory.prune(
                     self.state.get('inventory', {}), today, campaign_store.survives)
+            # item 4: contract value memory is cross-session too — keep while the expiry is alive.
+            if config.VALUE_MEMORY_ENABLED:
+                self.state['value_mem'] = value_memory.prune(
+                    self.state.get('value_mem', {}), today, campaign_store.survives)
             # P1: carry surviving campaigns forward as inherited/overnight memory (prune expired),
             # instead of waking up fresh. The intraday microstructure above is correctly reset; the
             # campaign MEMORY persists so the engine manages yesterday's still-alive theses first.
@@ -338,6 +367,18 @@ class AttentionEngine:
 
         market_ok = market_mass >= config.ATTENTION_MIN_TOTAL
         self._log_waves(ranked, market_mass, market_ok)
+        # item 12: continuous attention-transfer — a destination accelerating while another cools is a
+        # PRIORITY INVESTIGATION signal EVERY poll, independent of any exit (both may stay valid). This
+        # is a discovery accelerator, not a portfolio handoff.
+        if config.ATTN_TRANSFER_ENABLED and self._prev_scores:
+            risers = [(r['symbol'], r['attention_score'] - self._prev_scores.get(r['symbol'], r['attention_score']))
+                      for r in ranked if r.get('dominant_side')]
+            up = [(s, d) for s, d in risers if d >= config.ROT_MIN_DELTA_SCORE]
+            fell = any(d <= -config.ROT_MIN_DELTA_SCORE for _, d in risers)
+            if up and fell:
+                s, d = max(up, key=lambda x: x[1])
+                logger.info("ATTENTION-TRANSFER → PRIORITY INVESTIGATE %s (+%.0f attention; another "
+                            "ticker cooling) — discovery accelerator, not an exit", s, d)
         if config.MULTI_EXPIRY_ENABLED:
             self._maybe_scan_expiries(now)
 
@@ -382,9 +423,25 @@ class AttentionEngine:
                                 "(campaign management only, no re-entry)",
                                 en['ticker'], en['side'], en['side'])
                     continue
+                # item 10: expiry selector (shadow) — recommend the expiry that best expresses the
+                # campaign before entering (execution still uses the nearest expiry when shadow).
+                if config.EXPIRY_SELECTOR_ENABLED and self._expiry_rows.get(en['ticker']):
+                    sel = expiry_selector.select(
+                        self._expiry_rows[en['ticker']], traded_side=en['side'],
+                        minutes_since_open=self._minutes_since_open(now))
+                    if sel.get('best_dte') is not None:
+                        logger.info("EXPIRY-SELECT %s %s → %s%s", en['ticker'], en['side'], sel['reason'],
+                                    '' if config.EXPIRY_SELECTOR_SHADOW else ' (LIVE reroute)')
                 rej = self._open_wave(en, cand, ranked, market_mass, now)   # None on entry; §19 label on reject
                 if rej is None and config.DAILY_ENTRY_LOCK_ENABLED:
                     self.state.setdefault('entered_today', []).append(slot)
+                # item 17: Decision Ledger — record the outcome with EVERY hard veto (not just the first).
+                cc = cand.get(en['ticker'])
+                self._log_decision(now, en['ticker'], en['side'], metrics_by.get(en['ticker']), cc,
+                                   decision=('ALLOW' if rej is None else 'REJECT'),
+                                   owner=('_open_wave' if rej is None else f'_open_wave:{rej}'),
+                                   veto_reasons=([] if rej is None else self._hard_vetoes(cc, metrics_by.get(en['ticker']), now) or [rej]),
+                                   strike=(cc or {}).get('best', {}).get('strike'))
                 if config.RESEARCH_ARCHIVE_ENABLED:
                     self.archive.write(replay.candidate_record(
                         now, en['ticker'], en['side'], metrics_by.get(en['ticker']),
@@ -470,7 +527,8 @@ class AttentionEngine:
                                     call_q, call_acc, put_q, put_acc)
                     dom = qc['dominant_side']
             metrics[sym] = {**tm, 'symbol': sym, 'dominant_side': dom, 'spot': sf['spot'],
-                            'call': masses['call'], 'put': masses['put'], 'qualified_control': qc}
+                            'call': masses['call'], 'put': masses['put'], 'qualified_control': qc,
+                            'ticker_info': masses.get('ticker_info', 0.0)}
             if dom:
                 side_strikes = [d for (k, s), d in sf['strikes'].items() if s == dom]
                 # P2/P4: per-strike BarVolumeShock, computed once here and reused for the barshock
@@ -607,6 +665,26 @@ class AttentionEngine:
                                 store[ikey] = inventory.observe(
                                     rec, price=best.get('mark'), size=best.get('fresh_vol') or 0,
                                     ts=now.isoformat(), spot=sf['spot'], iv=best.get('iv'))
+                            # item 5: cumulative small-clip unwind — does NOT need a ≥250 print.
+                            if config.INV_MICRODIST_ENABLED:
+                                est_vol = ((inventory._basis(rec)['size'] if rec else 0)
+                                           or (best.get('fresh_vol') or 0))
+                                cand[sym]['inventory']['micro'] = inventory.micro_distribution(
+                                    minute_vols, marks, est_vol)
+                        # item 4: contract value memory (state-adjusted cheapness, not session-low).
+                        if config.VALUE_MEMORY_ENABLED:
+                            exp_iso2 = (self._expiry.get(sym).isoformat() if self._expiry.get(sym) else 'x')
+                            vkey = value_memory.contract_key(sym, dom, best['strike'], exp_iso2)
+                            vstore = self.state.setdefault('value_mem', {})
+                            vrec = vstore.get(vkey)
+                            cand[sym]['value'] = value_memory.assess(
+                                vrec, current_mark=best.get('mark'), current_delta=best.get('delta'),
+                                current_spot=sf['spot'])
+                            vstore[vkey] = value_memory.observe(
+                                vrec, mark=best.get('mark'), bid=best.get('bid'), ask=best.get('ask'),
+                                spot=sf['spot'],
+                                moneyness=(best['strike'] - sf['spot']) / sf['spot'] if sf.get('spot') else None,
+                                delta=best.get('delta'), iv=best.get('iv'), ts=now.isoformat())
                         if config.PACKAGES_ENABLED:
                             raw_vols = {(k, s): (d.get('fresh_vol') or 0)
                                         for (k, s), d in sf['strikes'].items()}
@@ -684,8 +762,19 @@ class AttentionEngine:
                         cand[sym]['quality'] = archetype.quality_score(
                             cand[sym]['archetype']['archetype'], qf)
         market_mass = sum(metrics[s]['ticker_mass'] for s in metrics) or config.WAVE_EPS
+        # item 15: InformationMass share (price-independent participation) kept PARALLEL to premium
+        # share, and a blended discovery_share so a cheap clean-convexity event is not buried by an
+        # expensive deep-ITM pool. Discovery uses the blend; core ranking still uses premium share.
+        market_info = sum(metrics[s].get('ticker_info', 0.0) for s in metrics) or config.WAVE_EPS
         for s in metrics:
             metrics[s]['attention_share'] = round(metrics[s]['ticker_mass'] / market_mass, 4)
+            metrics[s]['info_share'] = round(metrics[s].get('ticker_info', 0.0) / market_info, 4)
+            if config.INFO_MASS_ENABLED:
+                w = config.INFO_MASS_WEIGHT
+                metrics[s]['discovery_share'] = round(
+                    (1 - w) * metrics[s]['attention_share'] + w * metrics[s]['info_share'], 4)
+            else:
+                metrics[s]['discovery_share'] = metrics[s]['attention_share']
         ranked = mass.rank_attention(metrics)
         return ranked, {r['symbol']: r for r in ranked}, cand, market_mass
 
@@ -756,6 +845,17 @@ class AttentionEngine:
                         logger.info("REINFORCE-SUPPRESSED %s %s — same-side flow but MFE=%.4f weak "
                                     "(likely inventory distribution, not reinforcement)",
                                     pos['symbol'], pos['side'], mfe)
+                        continue
+                # item 5: cumulative small-clip unwind — even sub-250 clips into strength are exit-like.
+                if config.INV_MICRODIST_ENABLED:
+                    mv = self.flow.contract_minute_vols(pos['symbol'], pos['strike'], pos['side'], now)
+                    mks = self.flow.contract_marks(pos['symbol'], pos['strike'], pos['side'], now)
+                    est = (inventory._basis(rec)['size'] if rec else 0) or 0
+                    micro = inventory.micro_distribution(mv, mks, est)
+                    if micro['chunked']:
+                        logger.info("REINFORCE-SUPPRESSED %s %s — chunked micro-distribution (%s) — "
+                                    "likely quiet unwind, not reinforcement", pos['symbol'], pos['side'],
+                                    micro['reason'])
                         continue
             ctrl = m['call_control'] if pos['side'] == 'CALL' else m['put_control']
             strong = (m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z and ctrl >= config.WAVE_ACTIVE_CONTROL
@@ -916,6 +1016,55 @@ class AttentionEngine:
 
     # ── entries (Route: new ACTIVE wave, §16 contract gates) ──────────────────────
 
+    def _hard_vetoes(self, c, m, now) -> list:
+        """item 17: collect ALL hard gates that would block this candidate — not just the first — so the
+        Decision Ledger can expose every blocker at once. Best-effort mirror of the hard gates in
+        _open_wave (the ones that apply in both route and conjunctive modes)."""
+        v = []
+        if not c or not c.get('best'):
+            return ['DATA_QUALITY_REJECTION']
+        if config.BARSHOCK_GATE_ENABLED:
+            ok, why = barshock.entry_gate(c.get('barshock'))
+            if not ok:
+                v.append(f'barshock:{why}')
+        inv = c.get('inventory') or {}
+        if config.INVENTORY_ENABLED and config.INV_PASS_ON_HIGH and inv.get('ambiguity') == 'HIGH':
+            v.append('INVENTORY_AMBIGUITY_PASS')
+        pkg = c.get('package') or {}
+        if config.PACKAGES_ENABLED and config.PKG_VETO_ENABLED and pkg.get('leg'):
+            v.append(f"PACKAGE_LEG:{pkg.get('label')}")
+        if config.PORTFOLIO_RISK_ENABLED and config.PORT_GATE_ENABLED:
+            pg = portfolio.gate(c['side'], self._held())
+            if not pg['ok']:
+                v.append('PORTFOLIO_CONCENTRATION_LIMIT')
+        hyp = c.get('hypotheses') or {}
+        if config.HYPOTHESES_ENABLED and config.HYP_PASS_ENABLED and hyp.get('ambiguous'):
+            v.append('HYPOTHESIS_AMBIGUITY_PASS')
+        try:
+            ok, why = execution.check_executable(c['best'], now)
+            if not ok:
+                v.append(f'execution:{why}')
+        except Exception:
+            pass
+        return v
+
+    def _log_decision(self, now, sym, side, m, c, decision, owner, veto_reasons, expiry=None, strike=None) -> None:
+        """item 17: append one immutable Decision Ledger record. Never disrupts trading."""
+        if not config.DECISION_LEDGER_ENABLED:
+            return
+        try:
+            rec = decision_ledger.build_record(
+                now=now, ticker=sym, side=side, metric=m, cand=c, decision=decision, owner=owner,
+                veto_reasons=veto_reasons, code_version=self._code_version, config_hash=self._config_hash,
+                candidate_expiry=expiry, candidate_strike=strike,
+                runtime_flags={'MULTI_CAMPAIGN': config.MULTI_CAMPAIGN_ENABLED,
+                               'REVERSAL': config.REVERSAL_ENABLED,
+                               'QUALIFIED_CONTROL': config.QUALIFIED_CONTROL_ENABLED,
+                               'ENTRY_ROUTES': config.ENTRY_ROUTES_ENABLED})
+            decision_ledger.append(config.DECISION_LEDGER_FILE, rec)
+        except Exception:
+            logger.warning("decision-ledger write failed (non-fatal)", exc_info=True)
+
     def _open_wave(self, en, cand, ranked, market_mass, now) -> None:
         sym, side, w, m = en['ticker'], en['side'], en['wave'], en['metric']
         c = cand.get(sym)
@@ -1014,12 +1163,20 @@ class AttentionEngine:
                         "(%s breadth=%d ladder=$%.0f)", sym, side, surf.get('classification'),
                         surf.get('breadth'), surf.get('breadth_adjusted_strength'))
         if not route_ok and c['dist_low'] > config.GATE_MAX_DIST_FROM_LOW:
-            # §11: distinguish 'discovered early, executed late' (detection latency, fixable) from
-            # 'only recognised after it extended' (a valid reject) via premium drift since capture.
-            chased_label = valuemod.classify_chased(c.get('rel_premium'))
-            logger.info("ENTRY-REJECT %s %s chased (%.2f, drift=%.2fx → %s)", sym, side,
-                        c['dist_low'], c.get('rel_premium') or 1.0, chased_label)
-            return chased_label
+            # item 4: the session low is a crude, corruptible value anchor (a bad $0.05 open, a wide
+            # spread). If ContractValueMemory (robust percentile over real history) says the mark is
+            # still CHEAP for this contract, don't reject on the session-low ratio alone.
+            vm = c.get('value') or {}
+            if config.VALUE_MEMORY_ENABLED and vm.get('n', 0) >= config.BARSHOCK_MIN_BINS and vm.get('is_cheap'):
+                logger.info("VALUE-OVERRIDE %s %s session-low dist %.2f but robust value cheap (%s)",
+                            sym, side, c['dist_low'], vm.get('reason'))
+            else:
+                # §11: distinguish 'discovered early, executed late' (detection latency, fixable) from
+                # 'only recognised after it extended' (a valid reject) via premium drift since capture.
+                chased_label = valuemod.classify_chased(c.get('rel_premium'))
+                logger.info("ENTRY-REJECT %s %s chased (%.2f, drift=%.2fx → %s)", sym, side,
+                            c['dist_low'], c.get('rel_premium') or 1.0, chased_label)
+                return chased_label
         ok, why = execution.check_executable(best, now)
         if not ok:
             logger.info("ENTRY-REJECT %s %s execution=%s", sym, side, why)
@@ -1139,9 +1296,15 @@ class AttentionEngine:
         # Stricter EARLY-ASYMMETRY test for entering while still FORMING (fast route): a
         # not-yet-confirmed wave must clear a higher bar than a fully-ACTIVE one.
         if not route_ok and config.FORMING_ENTRY_ENABLED and w.state == 'FORMING':
+            # item 9: volume is senior to price. An EXCEPTIONAL FORMING event (very high posterior) is
+            # NOT spot-gated — waiting for the underlying to visibly move reprices away the convexity
+            # (NVDA 222.5P). Spot may confirm/penalise confidence afterward, but must not veto the first
+            # pristine informational event. Weak/ambiguous FORMING events still require spot confirm.
+            spot_required = (config.FORMING_REQUIRE_SPOT_CONFIRM
+                             and post < config.FORMING_SPOT_EXEMPT_POSTERIOR)
             if (post < config.FORMING_MIN_POSTERIOR or dist_prob > config.FORMING_MAX_DIST_PROB
                     or ev < config.FORMING_MIN_EV
-                    or (config.FORMING_REQUIRE_SPOT_CONFIRM and not c.get('spot_confirms'))):
+                    or (spot_required and not c.get('spot_confirms'))):
                 logger.info("ENTRY-REJECT %s %s FORMING early-asymmetry (post=%.2f dist=%.2f ev=%.3f "
                             "spot=%s)", sym, side, post, dist_prob, ev, c.get('spot_confirms'))
                 return 'MISSED_DUE_TO_EV_GATE'

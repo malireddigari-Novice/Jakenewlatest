@@ -137,6 +137,43 @@ def depletion(rec) -> dict:
     return {'state': state, 'remaining': round(max(0.0, 1.0 - frac), 3), 'distributed': round(frac, 3)}
 
 
+def micro_distribution(minute_vols, marks, est_campaign_vol) -> dict:
+    """Cumulative small-clip unwind detector (v3-review item 5). The 250-contract event floor misses a
+    slow hidden exit — 1,000 accumulated, then 100-lots every ~10 min while premium rises. We do NOT
+    need any single clip to be large: count minutes AFTER the premium peak that carry modest same-side
+    volume while premium sits near its highs (exit-like distribution-into-strength), sum that exit-like
+    volume, and compare it to the estimated original campaign volume. Probabilistic — never a ledger.
+    Returns {chunked(bool), state, exit_like_vol, clips, frac, reason}."""
+    v = [float(x) for x in (minute_vols or []) if x is not None and x >= 0]
+    # marks may be plain floats or (ts, mark) tuples (the lifecycle layer's raw premium series).
+    m = []
+    for x in (marks or []):
+        val = x[1] if isinstance(x, (tuple, list)) else x
+        if val is not None:
+            m.append(float(val))
+    if len(v) < config.INV_MICRO_MIN_CLIPS or len(m) < 3 or not est_campaign_vol:
+        return {'chunked': False, 'state': 'INSUFFICIENT', 'exit_like_vol': 0.0, 'clips': 0,
+                'frac': 0.0, 'reason': 'not enough history'}
+    peak = max(m)
+    peak_i = m.index(peak)
+    hi_gate = 0.85 * peak                       # "near the highs"
+    # align vols to marks by trailing overlap (both oldest→newest); count post-peak elevated-premium minutes
+    tail = v[-len(m):] if len(v) >= len(m) else v
+    exit_like, clips = 0.0, 0
+    for i in range(peak_i, len(m)):
+        vi = tail[i] if i < len(tail) else 0.0
+        if m[i] >= hi_gate and vi > 0:
+            exit_like += vi
+            clips += 1
+    frac = exit_like / est_campaign_vol if est_campaign_vol else 0.0
+    chunked = (clips >= config.INV_MICRO_MIN_CLIPS and frac >= config.INV_MICRO_EXIT_FRAC)
+    state = 'LIKELY_DISTRIBUTING_IN_CHUNKS' if chunked else 'NO_CHUNKED_EXIT'
+    return {'chunked': chunked, 'state': state, 'exit_like_vol': round(exit_like, 1), 'clips': clips,
+            'frac': round(frac, 3),
+            'reason': (f'{clips} small clips into strength = {100*frac:.0f}% of est campaign vol'
+                       if chunked else f'{clips} clips, {100*frac:.0f}% of est vol — below chunk threshold')}
+
+
 def prune(store, today, survives_fn) -> dict:
     """Drop inventory records whose expiry is no longer alive today (same rule as campaign memory).
     `survives_fn(expiry, today)` is campaign_store.survives — passed in to avoid a circular import."""

@@ -217,9 +217,9 @@ FRESH_EXTENDED_PCT = float(os.getenv('FRESH_EXTENDED_PCT', '0.50'))  # +35..50% 
 FRESH_BLOCK_MISSED = os.getenv('FRESH_BLOCK_MISSED', 'true').lower() == 'true'
 
 # ── Layer 4: position management ──────────────────────────────────────────────
-# One primary position by default; an OPTIONAL second only when a second ticker independently
-# clears an exceptional threshold. Rank loss ALONE never forces an exit.
-MAX_PRIMARY_POSITIONS   = int(os.getenv('MAX_PRIMARY_POSITIONS', '1'))
+# v3-review items 1-2: multiple independent Mag-7 campaigns may coexist (subject to the portfolio-
+# correlation gate). The concurrent-campaign cap is set in the v3-REVIEW block at the end of this file
+# (MAX_PRIMARY_POSITIONS, default 4 when MULTI_CAMPAIGN_ENABLED). Rank loss ALONE never forces an exit.
 ALLOW_SECOND_POSITION   = os.getenv('ALLOW_SECOND_POSITION', 'false').lower() == 'true'
 SECOND_POSITION_SHOCK   = float(os.getenv('SECOND_POSITION_SHOCK', '4.0'))   # exceptional shock for a 2nd
 SECOND_POSITION_SHARE   = float(os.getenv('SECOND_POSITION_SHARE', '0.50'))
@@ -968,6 +968,94 @@ REGIME_HIGH_VOL_MULT   = float(os.getenv('REGIME_HIGH_VOL_MULT', '0.92'))
 # ROLLED / CARRIED_OVERNIGHT / UNKNOWN. Stored on the serialized campaign at close.
 # ═══════════════════════════════════════════════════════════════════════════════
 CAMPAIGN_TAXONOMY_ENABLED = os.getenv('CAMPAIGN_TAXONOMY_ENABLED', 'true').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v3-REVIEW — INTEGRATION CORRECTIONS (2026-08-16): remove legacy tournament assumptions
+# ═══════════════════════════════════════════════════════════════════════════════
+# Items 1-2: attention rank is DISCOVERY, not eligibility; multiple Mag-7 campaigns may coexist
+# (subject to the portfolio-correlation gate). Raise the concurrent-campaign cap and stop an incumbent
+# from blocking an independent challenger. Absolute quality floors still apply per candidate.
+MULTI_CAMPAIGN_ENABLED  = os.getenv('MULTI_CAMPAIGN_ENABLED', 'true').lower() == 'true'
+MAX_PRIMARY_POSITIONS   = int(os.getenv('MAX_PRIMARY_POSITIONS', '4' if MULTI_CAMPAIGN_ENABLED else '1'))
+
+# Item 13/20: ReversalCluster owns ALL non-risk opposite-side exits. When REVERSAL_ENABLED, a raw
+# control ratio (overwhelming_flip / control_transfer) may NOT independently flatten a position —
+# only a qualified reversal event, hard risk, EOD, or profit management can.
+RAW_FLIP_EXIT_DISABLED  = os.getenv('RAW_FLIP_EXIT_DISABLED', 'true').lower() == 'true'
+
+# Item 9: an EXCEPTIONAL FORMING event (very high posterior/quality) is not spot-gated — volume is
+# senior to price; spot may confirm/penalise afterward but must not veto the first pristine event.
+FORMING_SPOT_EXEMPT_POSTERIOR = float(os.getenv('FORMING_SPOT_EXEMPT_POSTERIOR', '0.62'))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 5 — INVENTORY MICRO-DISTRIBUTION (cumulative small-clip unwind, no 250-floor)
+# The 250-contract event floor misses a slow hidden exit: 1,000 accumulated, then 100-lots every ~10
+# min while premium rises. Track ALL same-side clip volume cumulatively and flag chunked distribution
+# from exit-like flow vs estimated campaign inventory + MFE trend — probabilistic, never a ledger.
+# ═══════════════════════════════════════════════════════════════════════════════
+INV_MICRODIST_ENABLED   = os.getenv('INV_MICRODIST_ENABLED', 'true').lower() == 'true'
+INV_MICRO_EXIT_FRAC     = float(os.getenv('INV_MICRO_EXIT_FRAC', '0.50'))  # exit-like vol / est. campaign vol → chunked-distribution
+INV_MICRO_MIN_CLIPS     = int(os.getenv('INV_MICRO_MIN_CLIPS', '4'))       # min small clips into strength to qualify
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 4 — CONTRACT VALUE MEMORY (state-adjusted historical value, not naive $ compare)
+# Persistent per-contract value history: event marks, robust executable lows/percentiles, spot/
+# moneyness/delta/IV/DTE at each observation. "Cheapness" is judged vs event-local + robust history,
+# NOT the session low (a bad $0.05 print must not anchor the day). $3→$1 is interpreted with context.
+# ═══════════════════════════════════════════════════════════════════════════════
+VALUE_MEMORY_ENABLED    = os.getenv('VALUE_MEMORY_ENABLED', 'true').lower() == 'true'
+VALUE_MAX_SAMPLES       = int(os.getenv('VALUE_MAX_SAMPLES', '240'))       # cap stored value samples per contract
+VALUE_LOW_PCTILE        = float(os.getenv('VALUE_LOW_PCTILE', '0.10'))     # robust low = this percentile of marks
+VALUE_CHEAP_PCTILE      = float(os.getenv('VALUE_CHEAP_PCTILE', '0.35'))   # at/below this percentile = still cheap
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 10 — EXPIRY SELECTOR (detect campaign first, THEN choose expression)
+# After a campaign is detected, rank 0DTE / 1DTE / next-listed / weekly by remaining convexity, theta
+# burden, event information, liquidity, campaign horizon and cross-expiry migration. Shadow by default
+# (logs the recommended expiry) — the trade still uses the nearest expiry until wired to execution.
+# ═══════════════════════════════════════════════════════════════════════════════
+EXPIRY_SELECTOR_ENABLED = os.getenv('EXPIRY_SELECTOR_ENABLED', 'true').lower() == 'true'
+EXPIRY_SELECTOR_SHADOW  = os.getenv('EXPIRY_SELECTOR_SHADOW', 'true').lower() == 'true'  # log only, don't reroute execution
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 12 — CONTINUOUS ATTENTION TRANSFER (discovery accelerator, not an exit handoff)
+# Attention leaving one ticker while concentrating in another flags the destination for PRIORITY
+# INVESTIGATION every poll — whether or not the incumbent exits. Both may remain valid campaigns.
+# ═══════════════════════════════════════════════════════════════════════════════
+ATTN_TRANSFER_ENABLED   = os.getenv('ATTN_TRANSFER_ENABLED', 'true').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 15 — INFORMATION MASS (separate from premium/capital mass)
+# fresh_vol×price×100 measures CAPITAL and favours expensive contracts. Compute a parallel
+# InformationMass (abnormality × concentration) so a cheap clean-convexity event is not buried by
+# expensive deep-ITM inventory. Attention discovery blends both.
+# ═══════════════════════════════════════════════════════════════════════════════
+INFO_MASS_ENABLED       = os.getenv('INFO_MASS_ENABLED', 'true').lower() == 'true'
+INFO_MASS_WEIGHT        = float(os.getenv('INFO_MASS_WEIGHT', '0.30'))     # blend weight of info-share into attention
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 7 — TIME-OF-DAY BARSHOCK BASELINE (session-phase seasonality)
+# A 9:31 minute is structurally different from 11:47. Maintain a persistent per-contract, per session-
+# phase (open/mid-morning/midday/afternoon/close) volume baseline so a shock is judged vs normal
+# activity FOR THAT PHASE, not the short rolling median that misreads the open.
+# ═══════════════════════════════════════════════════════════════════════════════
+BARSHOCK_TOD_ENABLED    = os.getenv('BARSHOCK_TOD_ENABLED', 'true').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 14 — PACKAGE RESOLVER IS PROBABILISTIC (soften the hard veto)
+# Without complex-order condition codes, size/time-matched legs are only PROBABLE packages. Hard-veto
+# only when the non-outright (complex) probability is overwhelming; otherwise discount EV.
+# ═══════════════════════════════════════════════════════════════════════════════
+PKG_VETO_MIN_CONF       = float(os.getenv('PKG_VETO_MIN_CONF', '0.75'))    # hard veto needs package prob ≥ this
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 17 — DECISION LEDGER (one immutable record per near-candidate poll; ALL veto reasons)
+# The single most useful debugging artifact: every candidate that gets close to qualifying persists
+# its full state + decision + owner + EVERY failed gate (not just the first). Diagnoses false
+# negatives without serially discovering one hidden blocker at a time.
+# ═══════════════════════════════════════════════════════════════════════════════
+DECISION_LEDGER_ENABLED = os.getenv('DECISION_LEDGER_ENABLED', 'true').lower() == 'true'
+DECISION_LEDGER_FILE    = os.getenv('DECISION_LEDGER_FILE', 'jakenew_decisions.jsonl')
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
