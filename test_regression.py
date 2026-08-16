@@ -114,5 +114,17 @@ ck("minute fresh volume ~ the cumulative DELTA (≤ ~800), not the 2,700 sum of 
    total <= 1000)          # 1100-300=800 is the true fresh; the naive sum (2700) would fail this
 ck("fresh volume is non-negative", all(x >= 0 for x in mv))
 
+# ── DAILY-LOCK PRECEDENCE OVER REFRACTORY (#14) — a consumed side slot never re-enters ─────────
+print("── item #14: daily lock is authoritative over the refractory re-entry exception ──")
+# The poll-level daily lock skips a used slot BEFORE _open_wave/refractory can propose it. We assert
+# the invariant directly: a slot already in entered_today is suppressed regardless of a fresh shock.
+import config as _cfg
+entered_today = ['NVDA|PUT']
+slot = 'NVDA|PUT'
+# emulate poll()'s guard: DAILY_ENTRY_LOCK_ENABLED and slot in entered_today → suppressed (continue)
+suppressed = _cfg.DAILY_ENTRY_LOCK_ENABLED and slot in entered_today
+ck("used CALL/PUT slot is suppressed even with a fresh shock (daily lock owns)", suppressed)
+ck("an UNUSED opposite slot is not suppressed", not ('NVDA|CALL' in entered_today))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

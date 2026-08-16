@@ -52,7 +52,7 @@ def assess(rec, *, current_mark, current_delta=None, current_spot=None) -> dict:
     samples = (rec or {}).get('samples') or []
     marks = sorted(s['mark'] for s in samples if s.get('mark'))
     if not marks or not current_mark:
-        return {'robust_low': None, 'cheapness': None, 'is_cheap': True,
+        return {'robust_low': None, 'cheapness': None, 'is_cheap': True, 'value_state': 'UNKNOWN',
                 'state_adjusted_ratio': None, 'n': len(marks), 'reason': 'no value history'}
     robust_low = _pctile(marks, config.VALUE_LOW_PCTILE)
     cheap_gate = _pctile(marks, config.VALUE_CHEAP_PCTILE)
@@ -68,9 +68,18 @@ def assess(rec, *, current_mark, current_delta=None, current_spot=None) -> dict:
         exp = (prev['mark'] or 0) + float(current_delta) * (current_spot - prev['spot'])
         if exp and exp > 0:
             sar = round(current_mark / exp, 3)             # <1 = cheaper than the spot move explains
+    # item 8: ONE authoritative ValueState (session low is merely one input to the percentile history).
+    if cheapness >= config.VALUE_MATURE_PCTILE:
+        vstate = 'MATURE'
+    elif cheapness >= config.VALUE_EXTENDED_PCTILE:
+        vstate = 'EXTENDED'
+    elif is_cheap:
+        vstate = 'CHEAP'
+    else:
+        vstate = 'FAIR'
     return {'robust_low': robust_low, 'cheap_gate': cheap_gate, 'cheapness': cheapness,
-            'is_cheap': bool(is_cheap), 'state_adjusted_ratio': sar, 'n': len(marks),
-            'reason': f'mark ${current_mark:.2f} at {100*cheapness:.0f}%ile (robust-low ${robust_low:.2f})'}
+            'is_cheap': bool(is_cheap), 'value_state': vstate, 'state_adjusted_ratio': sar, 'n': len(marks),
+            'reason': f'{vstate}: mark ${current_mark:.2f} at {100*cheapness:.0f}%ile (robust-low ${robust_low:.2f})'}
 
 
 def prune(store, today, survives_fn) -> dict:

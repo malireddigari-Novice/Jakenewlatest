@@ -180,6 +180,13 @@ class WaveEngine:
 
             active_normal = (share >= config.WAVE_ACTIVE_SHARE and ctrl >= config.WAVE_ACTIVE_CONTROL
                              and m['mass_z'] >= config.WAVE_ACTIVE_Z and side_vel > 0)
+            # v3-canonicalization item 3: EXCEPTIONAL ABSOLUTE route — a genuine campaign whose Mag-7
+            # pool share is DILUTED by other simultaneous excellent campaigns can still activate on
+            # absolute abnormality + control + information concentration. Absolute quality > rel. rank.
+            active_absolute = (config.ABSOLUTE_ROUTE_ENABLED and m['mass_z'] >= config.WAVE_ABSOLUTE_Z
+                               and ctrl >= config.WAVE_ACTIVE_CONTROL and side_vel > 0
+                               and m.get('info_share', 0.0) >= config.WAVE_ABSOLUTE_INFO_SHARE)
+            active_normal = active_normal or active_absolute
             active_immediate = (m['mass_z'] >= config.WAVE_IMMEDIATE_Z and share >= config.WAVE_IMMEDIATE_SHARE
                                 and ctrl >= config.WAVE_IMMEDIATE_CONTROL and side_vel > 0 and side_acc > 0)
 
@@ -408,10 +415,16 @@ class WaveEngine:
         f = dict(health or {})
         if m is not None:                              # a revived wave earns confidence back
             ctrl = self._side_ctrl(m, side)
-            f['active'] = (m.get('attention_share', 0.0) >= config.WAVE_ACTIVE_SHARE
-                           and ctrl >= config.WAVE_ACTIVE_CONTROL
-                           and m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z
-                           and self._side_vel(m, side) > 0)
+            f['active'] = ((m.get('attention_share', 0.0) >= config.WAVE_ACTIVE_SHARE
+                            and ctrl >= config.WAVE_ACTIVE_CONTROL
+                            and m.get('mass_z', 0.0) >= config.WAVE_ACTIVE_Z
+                            and self._side_vel(m, side) > 0)
+                           # item 3: absolute-event route — share-diluted but exceptional campaign
+                           or (config.ABSOLUTE_ROUTE_ENABLED
+                               and m.get('mass_z', 0.0) >= config.WAVE_ABSOLUTE_Z
+                               and ctrl >= config.WAVE_ACTIVE_CONTROL
+                               and m.get('info_share', 0.0) >= config.WAVE_ABSOLUTE_INFO_SHARE
+                               and self._side_vel(m, side) > 0))
         rotation_active = bool(rot and rot.get('ticker') != t and rot.get('watched'))
         prev = w.confidence
         new_conf, dominant = hold.confidence_step(w.confidence, f, rotation_active)

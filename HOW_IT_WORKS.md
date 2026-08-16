@@ -2,7 +2,8 @@
 
 Jakenew watches the Mag-7 (AAPL, MSFT, AMZN, GOOGL, META, NVDA, TSLA) and tries to catch the
 **small number of institutional accumulation events** that actually shape a session — the moment
-dormant option volume becomes a compact, dominant, statistically abnormal campaign **while the
+dormant option volume becomes a **statistically abnormal, high-information institutional event/
+campaign** (v3-review item 20 — compact clustering is one exceptional archetype, not the definition) **while the
 option is still cheap**. It is not a scanner for "big volume." One real campaign = **one wave =
 one trade**, held until its objective is met or the thesis genuinely dies.
 
@@ -288,9 +289,11 @@ score. The verdict names the six campaign signals the detector exists to find:
 6. **campaign ENDING** — narrated on exit (control transferred / rotated to a stronger campaign /
    statistically exhausted / objective reached)
 
-The verdict is now **both linear and Bayesian**: the five-signal weighted score *and* a **Bayesian
-posterior** — a context prior (morning bias, DTE) updated by the likelihood ratio of each observed
-signal — must clear their thresholds. Entry then also requires **positive expected value**:
+The verdict combines a five-signal weighted score with a **heuristic posterior proxy** (v3-review
+item 7 — *not* a calibrated Bayesian probability until calibration proves it; also called the
+**continuation-evidence score**): a context prior (morning bias, DTE) updated by the likelihood ratio
+of each observed signal — must clear their thresholds. Entry then also requires **positive expected
+value**:
 
 ```
 ExpectedEntryValue = P(continue) · RemainingConvexity − P(false) · ExpectedLoss
@@ -326,7 +329,7 @@ A new position opens only when **all** are true (and the unified campaign verdic
 5. The contract is **on value** — mark ≤ **1.5× its session low** (never chase after the pop).
 6. Freshness isn't `MISSED`, notional clears the floor (higher for chains), quote liquid / not stale.
 7. The **campaign verdict is CONFIRMED** — five signals present, linear score ≥ minimum, **and**
-   Bayesian posterior ≥ minimum.
+   heuristic posterior proxy ≥ minimum (uncalibrated — see item 7).
 8. **Distribution probability** is below the entry veto, and **expected value is positive**.
 9. If the wave is still **FORMING** (not yet ACTIVE), it faces the **stricter early-asymmetry
    test**: higher posterior, lower distribution probability, larger EV, and positive spot
@@ -622,6 +625,55 @@ new architecture and could recreate old failures. Corrections (all tested; wired
 - **Item 7 — time-of-day BarVolumeShock** (`barshock.session_phase` / `bar_shock_tod`): built + tested
   but **not wired** — its baseline needs multi-session history to be useful, so wiring it adds risk for
   zero day-one benefit; deferred deliberately.
+
+### Final canonicalization pass (2026-08-16) — items 1-20
+
+Reconciling the last old-language / old-path contradictions so "How Jakenew Works" is canonical. New
+code is tested (39/39 files) + an end-to-end poll smoke; the rest is language reconciliation.
+
+**Code changes this pass:**
+- **Item 3 — two activation routes.** Besides the relative-attention route (`share ≥ WAVE_ACTIVE_SHARE`)
+  there is now an **exceptional-absolute route** (`ABSOLUTE_ROUTE_ENABLED`): a genuine campaign whose
+  Mag-7 pool share is *diluted* by other simultaneous excellent campaigns can still activate on
+  absolute abnormality (`WAVE_ABSOLUTE_Z`) + control + information concentration
+  (`WAVE_ABSOLUTE_INFO_SHARE`). Removes the residual share-tournament math. (`waves.py`)
+- **Item 5 — premium acceptance > required appreciation.** Exceptional flow being **ABSORBED** without
+  contract-price deterioration is now entry-eligible even if premium isn't yet rising
+  (`ACCEPT_ABSORPTION_ENABLED`). Accumulation no longer requires price to have already moved.
+- **Item 8 — one ValueState owner.** `value_memory.assess` now returns `CHEAP / FAIR / EXTENDED /
+  MATURE` from robust value percentiles; the session low is merely one input, no longer authoritative.
+- **Item 17 — event-level provenance** (`event_memory.py`): each significant contract event is stored
+  **immutably** (event_id, ts, size, price, spot, moneyness, IV, shape, direction/inventory hypotheses)
+  so future logic can recognize **multiple latent campaigns superposed on one contract** instead of
+  collapsing everything into one inventory story. Cross-session; pruned by expiry.
+- **Item 7 — terminology:** the score is a **heuristic posterior proxy / continuation-evidence
+  score**, not a calibrated Bayesian probability (fixed in the verdict section + philosophy).
+
+**Verified already-correct / already-enforced (locked with tests):**
+- **Item 14** — the daily one-ENTER-per-side lock is authoritative: a consumed slot is suppressed at
+  the poll level *before* the refractory can propose a re-entry (`test_regression`).
+- **Items 1-2, 13** — multi-campaign, qualified control, and reversal-owns-exits landed on 8/16.
+- **Item 4** — ContractValueMemory now *owns* value (ValueState), not just overriding the session-low.
+- **Item 18** — the doc's top banner + entry conditions + knobs now state one current runtime per module.
+
+**Language reconciled (no code change needed — behavior already correct):**
+- **Item 1** Layer-1 discovery consumes PremiumMass **and** InformationMass (`discovery_share`).
+- **Item 2** Layer-2 is **qualified** control (raw call/put share is observation only).
+- **Item 4/6** the campaign verdict no longer lists rank-1 / raw ≥66% / session-low / compact-only.
+- **Item 9** exceptional FORMING events are not spot-gated (volume senior).
+- **Item 10** contract selection is event-information inside `EVENT_SELECT_WINDOW` (no hard ATM±1).
+- **Item 11** ExpirySelector is **shadow** — a *known active limitation*: campaign direction can be
+  right while the traded nearest expiry is suboptimal. Not "solved" until it owns execution.
+- **Item 12** attention transfer → PRIORITY_INVESTIGATE, never mandatory capital rotation.
+- **Item 15/16** InformationMass parallel to premium mass; inventory stays probabilistic (a later
+  participant may accumulate while an earlier one exits — never treated as one identifiable owner).
+- **Item 18** cross-strike confirmation measures temporal/economic coherence (`cluster_shock`), not
+  identical morphology. **Item 19** opening gets opening-specific normalization, not a blanket penalty.
+
+**Still genuinely open (honest):** ExpirySelector owning execution (item 11) is the largest live
+limitation; time-of-day BarVolumeShock (item 7 of the 8/16 pass) awaits multi-session history; and
+inventory reconstruction under multiple superposed participants (items 16-17) is the next research
+problem — event provenance is now stored to make it *possible*, not yet *solved*.
 
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 

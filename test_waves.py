@@ -119,6 +119,31 @@ r2 = we_p.evaluate([mod], {'NVDA': mod}, {('NVDA', 'CALL')}, tp + 260)       # 2
 ck("moderate transfer exits only after 2 confirmations past min-hold",
    (not r1['exit']) and any(e['reason'] == 'CONTROL_TRANSFER' for e in r2['exit']))
 
+# v3-canonicalization item 3: an EXCEPTIONAL ABSOLUTE campaign whose Mag-7 pool SHARE is diluted by
+# other simultaneous campaigns must still be able to activate (absolute quality > relative share).
+config.ABSOLUTE_ROUTE_ENABLED = True
+def metric_abs(sym, share, z, info):
+    m = metric(sym, share=share, z=z, ctrl=0.85, vel=1e6, acc=1e5)
+    m['info_share'] = info
+    return m
+we_a = WaveEngine(); we_a.new_session(); ta = 7000.0
+low_share = 0.10                                  # well below WAVE_ACTIVE_SHARE (diluted pool)
+abs_hi = metric_abs('NVDA', low_share, config.WAVE_ABSOLUTE_Z + 1.0, config.WAVE_ABSOLUTE_INFO_SHARE + 0.05)
+st = None
+for i in range(5):
+    we_a.evaluate([abs_hi], {'NVDA': abs_hi}, set(), ta + 60 * i)
+    w = we_a.waves.get(('NVDA', 'CALL'))
+    st = w.state if w else None
+ck("diluted-share but exceptional-absolute campaign reaches ACTIVE (item 3)", st == 'ACTIVE')
+# control: the SAME low share with only MODERATE z + low info must NOT activate via the absolute route
+we_b = WaveEngine(); we_b.new_session(); tb = 7500.0
+weak = metric_abs('MSFT', low_share, config.WAVE_ACTIVE_Z, 0.05)   # z below absolute bar, tiny info share
+for i in range(5):
+    we_b.evaluate([weak], {'MSFT': weak}, set(), tb + 60 * i)
+wb = we_b.waves.get(('MSFT', 'CALL'))
+ck("diluted-share + non-exceptional does NOT activate (no tournament backdoor)",
+   (wb is None) or wb.state != 'ACTIVE')
+
 # ── rotation hysteresis ──
 we2 = WaveEngine(); we2.new_session(); t = 2000.0
 # AAPL held (incumbent). NVDA challenger with only a small score margin → NO rotation exit.

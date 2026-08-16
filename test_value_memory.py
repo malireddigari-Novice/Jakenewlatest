@@ -45,6 +45,16 @@ ck("move fully explained by spot → ratio ~1.0", a['state_adjusted_ratio'] is n
 a2 = vm.assess(rec3, current_mark=0.5, current_delta=0.5, current_spot=98.0)
 ck("cheaper than spot explains → ratio < 1", a2['state_adjusted_ratio'] < 1.0)
 
+print("── ValueState owner (#8): CHEAP / FAIR / EXTENDED / MATURE ──")
+rec4 = None
+for m in [1.0, 1.2, 1.5, 1.8, 2.0, 2.2, 2.5, 2.8, 3.0, 3.2]:
+    rec4 = vm.observe(rec4, mark=m, ts='t')
+ck("cheapest → CHEAP", vm.assess(rec4, current_mark=1.0)['value_state'] == 'CHEAP')
+ck("richest → MATURE", vm.assess(rec4, current_mark=3.2)['value_state'] == 'MATURE')
+ck("upper-mid → EXTENDED", vm.assess(rec4, current_mark=2.8)['value_state'] == 'EXTENDED')
+ck("mid (above cheap gate, below extended) → FAIR", vm.assess(rec4, current_mark=2.0)['value_state'] == 'FAIR')
+ck("no history → UNKNOWN", vm.assess(None, current_mark=1.0)['value_state'] == 'UNKNOWN')
+
 print("── prune by expiry ──")
 store = {vm.contract_key('NVDA', 'CALL', 220, '2026-08-16'): {'samples': []},
          vm.contract_key('NVDA', 'CALL', 220, '2020-01-01'): {'samples': []}}

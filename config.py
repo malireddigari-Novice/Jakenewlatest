@@ -1057,6 +1057,31 @@ PKG_VETO_MIN_CONF       = float(os.getenv('PKG_VETO_MIN_CONF', '0.75'))    # har
 DECISION_LEDGER_ENABLED = os.getenv('DECISION_LEDGER_ENABLED', 'true').lower() == 'true'
 DECISION_LEDGER_FILE    = os.getenv('DECISION_LEDGER_FILE', 'jakenew_decisions.jsonl')
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# v3-CANONICALIZATION (2026-08-16): finish removing the relative-share tournament + old paths
+# ═══════════════════════════════════════════════════════════════════════════════
+# Item 3: TWO activation routes. Besides the relative-attention route (share ≥ WAVE_ACTIVE_SHARE), an
+# EXCEPTIONAL ABSOLUTE event may activate even when simultaneous Mag-7 campaigns dilute its pool share
+# — very high abnormality + control + information participation. Absolute quality > relative rank.
+ABSOLUTE_ROUTE_ENABLED   = os.getenv('ABSOLUTE_ROUTE_ENABLED', 'true').lower() == 'true'
+WAVE_ABSOLUTE_Z          = float(os.getenv('WAVE_ABSOLUTE_Z', '6.0'))            # abnormality bar for the absolute route
+WAVE_ABSOLUTE_INFO_SHARE = float(os.getenv('WAVE_ABSOLUTE_INFO_SHARE', '0.22'))  # information-share concentration bar
+
+# Item 5: premium ACCEPTANCE (absorption) is tradeable — accumulation does NOT require price to already
+# be appreciating. Exceptional flow being ABSORBED without contract-price deterioration may enter.
+ACCEPT_ABSORPTION_ENABLED = os.getenv('ACCEPT_ABSORPTION_ENABLED', 'true').lower() == 'true'
+
+# Item 8: ValueState owner — CHEAP / FAIR / EXTENDED / MATURE from robust value percentiles (session
+# low is merely one input). Percentile gates over the contract's own mark history.
+VALUE_EXTENDED_PCTILE    = float(os.getenv('VALUE_EXTENDED_PCTILE', '0.70'))   # ≥ this pctile = EXTENDED
+VALUE_MATURE_PCTILE      = float(os.getenv('VALUE_MATURE_PCTILE', '0.90'))     # ≥ this pctile = MATURE
+
+# Item 17: event-level provenance — each significant contract event is stored IMMUTABLY (event_id, ts,
+# size, price, spot, moneyness, IV, shape, hypotheses) so future logic can recognize MULTIPLE latent
+# campaigns superposed on one contract, instead of collapsing everything into one inventory story.
+EVENT_MEMORY_ENABLED     = os.getenv('EVENT_MEMORY_ENABLED', 'true').lower() == 'true'
+EVENT_MEMORY_MAX         = int(os.getenv('EVENT_MEMORY_MAX', '60'))            # cap stored events per contract
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')

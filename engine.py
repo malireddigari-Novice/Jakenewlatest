@@ -31,6 +31,7 @@ from analysis import dataquality
 from analysis import decision_ledger
 from analysis import decompose
 from analysis import entry
+from analysis import event_memory
 from analysis import expiry_selector
 from analysis import value_memory
 from analysis import events as ev
@@ -167,6 +168,10 @@ class AttentionEngine:
             if config.VALUE_MEMORY_ENABLED:
                 self.state['value_mem'] = value_memory.prune(
                     self.state.get('value_mem', {}), today, campaign_store.survives)
+            # item 17: immutable event provenance is cross-session too (superposed-campaign analysis).
+            if config.EVENT_MEMORY_ENABLED:
+                self.state['events'] = event_memory.prune(
+                    self.state.get('events', {}), today, campaign_store.survives)
             # P1: carry surviving campaigns forward as inherited/overnight memory (prune expired),
             # instead of waking up fresh. The intraday microstructure above is correctly reset; the
             # campaign MEMORY persists so the engine manages yesterday's still-alive theses first.
@@ -733,6 +738,24 @@ class AttentionEngine:
                                 'cluster': clus, 'significant': top['significant'],
                                 'event_type': barshock.classify_event(top['shock'], rel, clus),
                                 'position': barshock.strike_position(tk, sf['spot'], dom)}
+                    # item 17: record the significant event IMMUTABLY (event-level provenance) so future
+                    # logic can separate multiple latent campaigns superposed on one contract.
+                    if config.EVENT_MEMORY_ENABLED:
+                        try:
+                            bsr = cand[sym].get('barshock') or {}
+                            if bsr.get('significant'):
+                                exp_iso3 = (self._expiry.get(sym).isoformat() if self._expiry.get(sym) else 'x')
+                                self.state['events'] = event_memory.record(
+                                    self.state.get('events', {}), ticker=sym, side=dom,
+                                    strike=best['strike'], expiry=exp_iso3, ts=now.isoformat(),
+                                    size=best.get('fresh_vol') or 0, price=best.get('mark'),
+                                    spot=sf['spot'], iv=best.get('iv'), delta=best.get('delta'),
+                                    moneyness=(best['strike'] - sf['spot']) / sf['spot'] if sf.get('spot') else None,
+                                    shape=bsr.get('event_type'),
+                                    direction_hyp=(cand[sym].get('hypotheses') or {}).get('top'),
+                                    inventory_hyp=(cand[sym].get('inventory') or {}).get('state'))
+                        except Exception:
+                            logger.warning("%s: event-memory record failed (non-fatal)", sym, exc_info=True)
                     # Phase 5: strike-surface profile (ticker-level campaign first; research/log).
                     if config.SURFACE_ENABLED:
                         sm = masses['call_strikes'] if dom == 'CALL' else masses['put_strikes']
@@ -1187,11 +1210,20 @@ class AttentionEngine:
             return 'MISSED_DUE_TO_PRICE_EXTENSION'
         # ACCUMULATION vs DISTRIBUTION — reject heavy volume that is NOT expanding the premium
         # (distribution / exit flow / late chasing). Only accumulation waves may open a trade.
-        if not route_ok and config.REQUIRE_ACCUMULATION and not c.get('accumulation'):
+        # v3-canonicalization item 5: premium ACCEPTANCE > required appreciation. Exceptional flow being
+        # ABSORBED without contract-price deterioration is tradeable even if premium isn't yet rising —
+        # accumulation does not require price to already have moved.
+        absorbing = (config.ACCEPT_ABSORPTION_ENABLED
+                     and (c.get('acceptance') or {}).get('label') == 'ABSORPTION'
+                     and (c.get('resp_event') or 0.0) >= 0)
+        if not route_ok and config.REQUIRE_ACCUMULATION and not c.get('accumulation') and not absorbing:
             logger.info("ENTRY-REJECT %s %s %s (%s, resp=%+.0f%% shape=%s)", sym, side,
                         c.get('acc_label'), c.get('shape'), 100 * (c.get('resp_event') or 0),
                         c.get('shape'))
             return 'ECONOMICALLY_VALID_REJECTION'
+        if absorbing and not c.get('accumulation'):
+            logger.info("ENTRY-ALLOW %s %s premium ABSORPTION accepted (resp=%+.0f%%) — accumulation "
+                        "does not require prior appreciation (item 5)", sym, side, 100 * (c.get('resp_event') or 0))
         # P4 archetype gate: apply archetype-specific ENTRY expectations. Only a recognized
         # ACCUMULATION archetype may open a trade — a DISTRIBUTION shape (exit flow) or an
         # UNCLASSIFIED one (no coherent signature) is rejected even if the earlier gates passed
