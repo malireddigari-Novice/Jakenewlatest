@@ -9,12 +9,17 @@ one trade**, held until its objective is met or the thesis genuinely dies.
 **Mode: ACTIVE on the Alpaca PAPER account** (`ALPACA_ENABLED=true`, `ALPACA_PAPER=true`) — it
 places **real orders with simulated money** (no real capital), a forward-test with real fills and
 spreads. Set `ALPACA_ENABLED=false` to return to SHADOW (log only). Risk controls in force: 1%
-sizing, one position at a time, −40% hard stop, EOD flatten.
+sizing, **up to `MAX_PRIMARY_POSITIONS` (default 4) concurrent campaigns** — multiple independent
+Mag-7 campaigns may coexist, governed by the portfolio-correlation gate, NOT a one-position tournament
+(v3-review items 1-2) — −40% hard stop, EOD flatten.
 
 > **Authoritative runtime status — `.env` wins, not this doc.** The knob tables below show code
 > DEFAULTS (many read **false** there); the *actual* loaded values come from `.env`, which overrides
 > them, and are printed at every launch as a `RUNTIME CONFIG` log line (and `EXIT DECISION OWNER = …`).
-> As of **2026-08-15** the live paper `.env` has ALL behavior flags **ON** — including the 8/15
+> As of **2026-08-16** the live paper `.env` has ALL behavior flags **ON** — including the 8/16
+> v3-review integration corrections (multi-campaign / MAX_PRIMARY_POSITIONS=4, reversal-owns-exits,
+> FORMING spot-exemption, inventory micro-distribution, ContractValueMemory, probabilistic packages,
+> InformationMass, continuous attention-transfer, shadow ExpirySelector, Decision Ledger) and the 8/15
 > additions: the inventory / package-roll / portfolio-risk layers *and* the rotation resolver,
 > expiry-value (late-0DTE + overnight carry), cross-expiry direction, multi-hypothesis (H1–H8),
 > data-quality/quote-sync, hedge-flow, premium-decomposition, regime, and campaign-end taxonomy
@@ -45,6 +50,16 @@ sizing, one position at a time, −40% hard stop, EOD flatten.
 > | Premium decomposition (delta/gamma/IV) | ✅ | ✅ | n/a (feeds hedge + log) | n/a |
 > | Regime context | ✅ | ✅ | ◑ confidence modifier only | ❌ |
 > | Campaign end taxonomy | ✅ | ✅ | n/a (historical memory) | n/a |
+> | Multi-campaign (no tournament) | ✅ | ✅ | ✅ up to MAX_PRIMARY_POSITIONS (4); incumbent doesn't block challenger | ❌ new 8/17 |
+> | Reversal owns opposite exits (raw-flip disabled) | ✅ | ✅ | ✅ raw control flip can't flatten (item 13) | ❌ new 8/17 |
+> | FORMING spot-exemption (volume senior) | ✅ | ✅ | ✅ exceptional events not spot-gated (item 9) | ❌ |
+> | Inventory micro-distribution | ✅ | ✅ | ✅ suppresses false STRENGTHENING (item 5) | ❌ |
+> | ContractValueMemory (robust-value cheapness) | ✅ | ✅ | ✅ overrides session-low reject (item 4) | ❌ |
+> | InformationMass (discovery blend) | ✅ | ✅ | ◑ discovery_share blend (item 15) | ❌ |
+> | Attention-transfer (continuous) | ✅ | ✅ | ◑ priority-investigate log (item 12) | ❌ |
+> | ExpirySelector | ✅ | ✅ | ❌ shadow/log only (item 10) | n/a |
+> | Decision Ledger (all veto reasons) | ✅ | ✅ | n/a (diagnostics → jakenew_decisions.jsonl, item 17) | n/a |
+> | Time-of-day BarVolumeShock | ✅ | ❌ | ❌ built+tested, NOT wired (needs multi-session history, item 7) | n/a |
 > | T+1 OI confirmation | ✅ | ❌ | ❌ needs Schwab OI (off) | n/a |
 >
 > **Allowed exits that bypass the hold engine (by design):** hard stop, EOD flatten, overwhelming
@@ -65,8 +80,11 @@ Volume alone means nothing. The engine asks five questions, in order:
    volume while premium bleeds)?
 5. Has the wave **ended**, hit its objective, or **rotated** to another ticker?
 
-A trade is only born when a *new* wave, on the *controlling* side of the *attention-leading*
-ticker, shows *accumulation* while the contract is still near its value low. All of that is rolled
+A trade is born when a *new* wave, on the *qualified-controlling* side of a ticker with **exceptional
+absolute event/campaign quality**, shows *accumulation* while the contract is still cheap by robust
+value. Attention rank guides *where to look first* — it is NOT an eligibility requirement (a rank #2/#3
+ticker with a pristine event qualifies; multiple Mag-7 campaigns coexist — v3-review items 1-2, 21).
+All of that is rolled
 into **one explicit verdict** — *"is this a genuine institutional campaign starting while convexity
 is still cheap?"* (see **The campaign verdict** below). The engine does not ask "did a threshold get
 crossed?"; it asks whether a campaign is being born.
@@ -295,8 +313,13 @@ to a stronger campaign."* This is §14/§15 made concrete: the engine thinks in 
 A new position opens only when **all** are true (and the unified campaign verdict is CONFIRMED):
 
 1. A **new wave** has reached entry-eligibility (FORMING or ACTIVE — we enter early, on value).
-2. The ticker **leads Mag-7 attention** (rank 1) and leads rank-2 by a real margin (or it sits out).
-3. **Control** belongs to the trade direction and owns the tape (≥ 66% of fresh premium).
+2. The ticker is within the **discovery window** (top `ROUTE_MAX_RANK`, default 3) — attention rank
+   is discovery context, NOT a rank-1 tournament; absolute event/campaign quality is what qualifies,
+   and multiple Mag-7 campaigns may coexist (v3-review items 1-2). *(Legacy rank-1 + lead-margin
+   applies only if `ENTRY_ROUTES_ENABLED` is off.)*
+3. **Qualified control** belongs to the trade direction — economic-intent-weighted flow (after event
+   morphology / inventory / package / acceptance discounts), NOT raw call-vs-put premium share
+   (v3-review item 3; `qualified.py`). Raw ≥66%-share is no longer authoritative on its own.
 4. **Accumulation**, not distribution (positive premium response, compact shape) — *or* a
    **delayed-convexity** campaign that briefly consolidated (positive prior excursion + recovering
    shakeout), which is tolerated rather than rejected.
@@ -858,3 +881,15 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `DECOMPOSE_ENABLED` | true | #14: ΔP = delta·ΔS + ½·gamma·ΔS² + IV residual |
 | `REGIME_ENABLED` / `REGIME_EVENT_DATES` | true / (empty) | #17: macro/vol confidence modifier; fill CPI/FOMC/earnings/OpEx dates weekly |
 | `CAMPAIGN_TAXONOMY_ENABLED` | true | #21: end taxonomy (FAILED/REALIZED_PROFIT/ROLLED/…) stored at close |
+| *— v3-review integration corrections (2026-08-16; all ON in `.env`) —* | | |
+| `MULTI_CAMPAIGN_ENABLED` / `MAX_PRIMARY_POSITIONS` | true / **4** | items 1-2: multiple coexisting campaigns; incumbent no longer blocks a challenger |
+| `RAW_FLIP_EXIT_DISABLED` | true | item 13: raw control flip can't flatten; ReversalCluster owns opposite exits |
+| `FORMING_SPOT_EXEMPT_POSTERIOR` | 0.62 | item 9: exceptional FORMING events not spot-gated (volume senior) |
+| `INV_MICRODIST_ENABLED` / `INV_MICRO_EXIT_FRAC` / `INV_MICRO_MIN_CLIPS` | true / 0.50 / 4 | item 5: cumulative small-clip unwind (no 250 floor) |
+| `VALUE_MEMORY_ENABLED` / `VALUE_LOW_PCTILE` / `VALUE_CHEAP_PCTILE` | true / 0.10 / 0.35 | item 4: robust-value cheapness, not session-low |
+| `INFO_MASS_ENABLED` / `INFO_MASS_WEIGHT` | true / 0.30 | item 15: InformationMass blended into discovery_share |
+| `ATTN_TRANSFER_ENABLED` | true | item 12: continuous priority-investigation on attention transfer |
+| `EXPIRY_SELECTOR_ENABLED` / `EXPIRY_SELECTOR_SHADOW` | true / true | item 10: rank expiries (shadow — logs, execution still nearest) |
+| `PKG_VETO_MIN_CONF` | 0.75 | item 14: package hard-veto only when complex prob overwhelming |
+| `DECISION_LEDGER_ENABLED` / `DECISION_LEDGER_FILE` | true / jakenew_decisions.jsonl | item 17: per-candidate record, ALL veto reasons |
+| `BARSHOCK_TOD_ENABLED` | true *(module only)* | item 7: time-of-day baseline built+tested but NOT wired (needs multi-session history) |
