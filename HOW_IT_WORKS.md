@@ -35,11 +35,11 @@ sizing, one position at a time, −40% hard stop, EOD flatten.
 > | Qualified directional control (info > raw mass) | ✅ | ✅ | ✅ **re-derives side control** from qualified mass (NVDA 8/11) | ⚠️ dry-run only |
 > | Reversal cluster (EXIT≠REVERSE) | ✅ | ✅ | ✅ **owns opposite-side exits** | ❌ |
 > | Inventory memory + PASS (cost-basis/MFE) | ✅ | ✅ | ✅ HIGH-ambiguity abstains; MED discounts; suppresses false STRENGTHENING | ⚠️ dry-run only |
-> | Package / roll resolver | ✅ | ✅ | ◑ soft EV discount (hard veto OFF) | ❌ |
+> | Package / roll resolver | ✅ | ✅ | ✅ soft EV discount + hard veto (`PKG_VETO` ON) | ❌ |
 > | Portfolio correlation-risk gate | ✅ | ✅ | ✅ vetoes over-concentration at entry | ⚠️ dry-run: non-binding |
 > | Rotation resolver | ✅ | ✅ | ◑ names destination on rotation exit (log) | ❌ |
 > | Late-0DTE value gate | ✅ | ✅ | ✅ vetoes theta-dominated late 0DTE | ❌ |
-> | Multi-hypothesis (H1–H8) | ✅ | ✅ | ◑ soft (PASS gate OFF) | ❌ |
+> | Multi-hypothesis (H1–H8) | ✅ | ✅ | ✅ soft + abstain-on-ambiguity (`HYP_PASS` ON) | ❌ |
 > | Data-quality / quote-sync | ✅ | ✅ | ✅ drops invalid snapshots; cuts stale-quote confidence | ❌ |
 > | Hedge-flow (directional vs convexity) | ✅ | ✅ | ◑ soft EV discount | ❌ |
 > | Premium decomposition (delta/gamma/IV) | ✅ | ✅ | n/a (feeds hedge + log) | n/a |
@@ -806,12 +806,12 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `INVENTORY_ENABLED` / `INV_PASS_ON_HIGH` | true / true | #1-4: cost-basis + MFE; HIGH ambiguity → `INVENTORY_AMBIGUITY_PASS` |
 | `INV_EVENT_MIN_CONTRACTS` / `INV_OBSERVE_INTERVAL_S` | 250 / 300 | min print size remembered; min seconds between recorded prints |
 | `INV_DEPLETION_ENABLED` | true | #4: coarse remaining-inventory ladder FUNDED→PARTIAL→MAJORITY→CLOSED |
-| `PACKAGES_ENABLED` / `PKG_VETO_ENABLED` | true / **false** | #7: size-matched spread/roll legs → soft discount; hard veto OFF |
+| `PACKAGES_ENABLED` / `PKG_VETO_ENABLED` | true / **false** *(env: ON)* | #7: size-matched spread/roll legs → soft discount + hard veto (both ON in `.env`) |
 | `PORTFOLIO_RISK_ENABLED` / `PORT_GATE_ENABLED` | true / true | #18: correlated-exposure gate (`PORT_MAX_CORR_SIDE`, default 4) |
 | `ROTATION_RESOLVER_ENABLED` | true | §23-24: name the rotation destination on a rotation exit |
 | `EXPIRY_VALUE_ENABLED` / `LATE0DTE_GATE_ENABLED` | true / true | §36: LateDay0DTEValue (theta ramp) vetoes weak late 0DTE; #6 overnight carry |
 | `CROSS_EXPIRY_DIR_ENABLED` | true | #8: forward-expiry control agreement confirms/vetoes direction |
-| `HYPOTHESES_ENABLED` / `HYP_PASS_ENABLED` | true / **false** | #9: H1–H8 distribution (soft); abstain-on-ambiguity gate OFF |
+| `HYPOTHESES_ENABLED` / `HYP_PASS_ENABLED` | true / **false** *(env: ON)* | #9: H1–H8 distribution + abstain-on-ambiguity (both ON in `.env`) |
 | `DATA_QUALITY_ENABLED` / `DQ_DROP_ENABLED` | true / true | #11-12: validate OPRA snapshots; drop crossed/negative/no-mark; stale→low confidence |
 | `HEDGE_FLOW_ENABLED` | true | #13: directional vs convexity-demand confidence (soft discount) |
 | `DECOMPOSE_ENABLED` | true | #14: ΔP = delta·ΔS + ½·gamma·ΔS² + IV residual |
