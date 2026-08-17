@@ -63,10 +63,20 @@ Mag-7 campaigns may coexist, governed by the portfolio-correlation gate, NOT a o
 > | Time-of-day BarVolumeShock | ✅ | ❌ | ❌ built+tested, NOT wired (needs multi-session history, item 7) | n/a |
 > | T+1 OI confirmation | ✅ | ❌ | ❌ needs Schwab OI (off) | n/a |
 >
-> **Allowed exits that bypass the hold engine (by design):** hard stop, EOD flatten, overwhelming
-> opposite-side flip, and profit objective (TP/trail/runner). Everything else about staying-in vs
-> leaving is decided by CampaignConfidence, logged per-poll as `… HOLD conf=… (Δ… ctrl_ok=… dist=…)`
-> and, on exit, `decided_by=CAMPAIGN_CONFIDENCE`.
+> **Allowed exits that bypass the hold engine (by design):** hard stop, EOD flatten, a **qualified
+> ReversalCluster activation** (NOT a raw control flip — v3-review item 13), and profit objective
+> (TP/trail/runner). Everything else about staying-in vs leaving is decided by CampaignConfidence,
+> logged per-poll as `… HOLD conf=… (Δ… ctrl_ok=… dist=…)` and, on exit, `decided_by=CAMPAIGN_CONFIDENCE`.
+
+> **Pre-open readiness check — 2026-08-16 (for the 08-17 session).** Verified live: 39/39 test files
+> pass; all modules compile; `main.py` imports; state file healthy (flat, 5 campaigns queued for
+> session-roll carry-forward). Alpaca **data feed LIVE** (`data.verify()`=True — the hard dependency)
+> and **paper execution verified** (`exec.verify()`=True, portfolio ≈ $75k, 0 positions,
+> `ALPACA_PAPER=True`). Scheduler `Jakenew_DailyRun` = Ready, next run **Mon 08:10 CST**, Mon–Fri,
+> last result 0. End-to-end poll smoke: 8 polls, 0 exceptions, all candidate reads populate. Schwab is
+> **optional** (degrades to Alpaca-only; OI-confirm off) so its stale token is not a blocker. Net
+> new day-one behavior vs prior sessions: **up to 4 concurrent campaigns** + the **absolute-event
+> activation route** — expect more, lower-rank entries; watch `jakenew_decisions.jsonl`.
 
 ---
 
