@@ -72,5 +72,11 @@ ck("effective shock is the more conservative (open spike is normal for the open)
 tod2 = bs.bar_shock_tod(series, mark=2.5, phase_baseline=[])
 ck("no phase history → effective == rolling shock", tod2['effective_shock'] == tod2['shock'])
 
+print("── baseline quality tag (v3-audit item 7) ──")
+ck("unseeded baseline → UNSEEDED", bs.bar_shock([100])['baseline_quality'] == 'UNSEEDED')
+ck("short baseline → PARTIAL", bs.bar_shock([20, 30, 25, 15, 800])['baseline_quality'] == 'PARTIAL')
+long_series = [20, 30, 25, 15, 30, 22, 28, 19, 26, 900]
+ck("well-filled baseline → ESTABLISHED", bs.bar_shock(long_series)['baseline_quality'] == 'ESTABLISHED')
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

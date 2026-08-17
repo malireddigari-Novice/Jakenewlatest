@@ -24,16 +24,20 @@ def decompose(*, prev_mark, mark, delta, gamma, spot_prev, spot) -> dict:
     delta_c = float(delta) * dS
     gamma_c = 0.5 * float(gamma) * dS * dS if gamma is not None else 0.0
     explained = delta_c + gamma_c
-    residual = dP - explained                    # ≈ vega·ΔIV − theta·Δt (the vol/convexity component)
+    # v3-audit item 13: this residual is NOT pure IV demand — it also carries theta, vega nonlinearity,
+    # spread/quote noise, higher-order greeks and timestamp mismatch. Until vega/theta + synchronized
+    # timestamps exist it is the UNEXPLAINED premium component, not "IV". Driver: SPOT vs UNEXPLAINED.
+    unexplained = dP - explained
     denom = abs(dP) if abs(dP) > 1e-9 else 1e-9
-    iv_share = max(0.0, min(1.0, abs(residual) / denom))
+    unexplained_share = max(0.0, min(1.0, abs(unexplained) / denom))
     spot_share = max(0.0, min(1.0, abs(explained) / denom))
     if spot_share >= 0.65:
-        driver = 'DELTA_DRIVEN'
-    elif iv_share >= 0.65:
-        driver = 'IV_DRIVEN'
+        driver = 'SPOT_DRIVEN'
+    elif unexplained_share >= 0.65:
+        driver = 'UNEXPLAINED_DRIVEN'            # likely IV/vol, but not proven until greeks exist
     else:
         driver = 'MIXED'
     return {'dP': round(dP, 4), 'delta_contrib': round(delta_c, 4), 'gamma_contrib': round(gamma_c, 4),
-            'residual': round(residual, 4), 'driver': driver, 'iv_share': round(iv_share, 3),
-            'reason': f'{driver} (spot {spot_share:.2f} / iv {iv_share:.2f})'}
+            'unexplained_premium': round(unexplained, 4), 'unexplained_share': round(unexplained_share, 3),
+            'driver': driver, 'spot_share': round(spot_share, 3),
+            'reason': f'{driver} (spot {spot_share:.2f} / unexplained {unexplained_share:.2f})'}

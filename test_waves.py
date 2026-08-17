@@ -144,6 +144,43 @@ wb = we_b.waves.get(('MSFT', 'CALL'))
 ck("diluted-share + non-exceptional does NOT activate (no tournament backdoor)",
    (wb is None) or wb.state != 'ACTIVE')
 
+# v3-audit item 2: CampaignConfidence answers "is MY thesis alive?"; only ReversalCluster may authorize
+# an OPPOSITE-side exit. A confidence collapse dominated by CONTROL/OPP must be SUPPRESSED when REVERSAL
+# owns opposite exits — closing the GOOGL/NVDA backdoor where weak opposite flow indirectly exits.
+config.CAMPAIGN_CONFIDENCE_ENABLED = True
+config.REVERSAL_ENABLED = True
+config.RAW_FLIP_EXIT_DISABLED = True
+we_c = WaveEngine(); we_c.new_session(); tc = 8000.0
+strong = metric('NVDA', share=0.6, z=6.0, ctrl=0.9)
+we_c.evaluate([strong], {'NVDA': strong}, set(), tc)
+wc = we_c.waves[('NVDA', 'CALL')]; wc.entry_issued = True; wc.go_active(tc); wc.active_ts = tc
+wc.confidence = config.CONF_INIT
+weakm = metric('NVDA', share=0.1, z=1.0, ctrl=0.3, vel=-1.0)     # own side lost control (opposite-driven)
+lost_control = {'control_ok': False, 'opp_strong': True, 'dist_high': False, 'progressing': True,
+                'higher_low': True, 'reaccelerating': False, 'active': False}
+opp_exit = False
+for i in range(1, 25):
+    r = we_c.evaluate([weakm], {'NVDA': weakm}, {('NVDA', 'CALL')}, tc + 600 + 60 * i,
+                      health_by={('NVDA', 'CALL'): lost_control})
+    if any(e['side'] == 'CALL' for e in r['exit']):
+        opp_exit = True; break
+ck("CONTROL/OPP-dominant confidence collapse is SUPPRESSED when reversal owns opposite exits (item 2)",
+   not opp_exit)
+# contrast: with REVERSAL off, the same lost-control collapse DOES exit (own-side authority path)
+config.REVERSAL_ENABLED = False
+we_d = WaveEngine(); we_d.new_session(); td = 9000.0
+we_d.evaluate([strong], {'NVDA': strong}, set(), td)
+wd = we_d.waves[('NVDA', 'CALL')]; wd.entry_issued = True; wd.go_active(td); wd.active_ts = td
+wd.confidence = config.CONF_INIT
+did_exit = False
+for i in range(1, 25):
+    r = we_d.evaluate([weakm], {'NVDA': weakm}, {('NVDA', 'CALL')}, td + 600 + 60 * i,
+                      health_by={('NVDA', 'CALL'): lost_control})
+    if any(e['side'] == 'CALL' for e in r['exit']):
+        did_exit = True; break
+ck("with REVERSAL off, the legacy own-side path still exits on the collapse", did_exit)
+config.CAMPAIGN_CONFIDENCE_ENABLED = False; config.REVERSAL_ENABLED = True   # restore
+
 # ── rotation hysteresis ──
 we2 = WaveEngine(); we2.new_session(); t = 2000.0
 # AAPL held (incumbent). NVDA challenger with only a small score margin → NO rotation exit.

@@ -295,14 +295,17 @@ CW_ACCUMULATION = float(os.getenv('CW_ACCUMULATION', '0.25'))
 CW_CONTROL      = float(os.getenv('CW_CONTROL', '0.15'))
 CW_CHEAP        = float(os.getenv('CW_CHEAP', '0.10'))
 
-# §8 lead requirement (ticker may be a candidate only when it leads Mag-7 attention).
-WAVE_LEAD_SHARE    = float(os.getenv('WAVE_LEAD_SHARE', '0.42'))
+# ⚠️ LEGACY / DISCOVERY-ONLY — NOT AUTHORITATIVE when ENTRY_ROUTES_ENABLED=true (v3-audit item 4).
+# These are the OLD winner-take-all tournament knobs (leader must own ≥share and beat rank-2 by margin
+# or sit out). Under Entry Routes (live) the entry verdict is entry.py's asymmetry score over the top
+# ROUTE_MAX_RANK candidates — WAVE_LEAD_SHARE/MARGIN are BYPASSED (see waves.evaluate: the rank-1 +
+# lead-margin branch runs ONLY in the `else` of `if config.ENTRY_ROUTES_ENABLED`). Do NOT wire these
+# back into eligibility. Kept only for the legacy path + as discovery diagnostics.
+WAVE_LEAD_SHARE    = float(os.getenv('WAVE_LEAD_SHARE', '0.42'))   # LEGACY (routes bypass)
 WAVE_LEAD_Z_STRONG = float(os.getenv('WAVE_LEAD_Z_STRONG', '3.0'))
 WAVE_LEAD_Z_MID    = float(os.getenv('WAVE_LEAD_Z_MID', '2.5'))
 WAVE_LEAD_IMPULSE  = float(os.getenv('WAVE_LEAD_IMPULSE', '1.75'))
-# The leader must clearly DOMINATE (lead rank-2 by this Attention-Score margin) to enter — in a
-# contested pool nobody leads by the margin, so the engine sits out (spec §18: 'occasionally no trades').
-WAVE_LEAD_MARGIN   = float(os.getenv('WAVE_LEAD_MARGIN', '10.0'))
+WAVE_LEAD_MARGIN   = float(os.getenv('WAVE_LEAD_MARGIN', '10.0'))  # LEGACY (routes bypass)
 
 # §9 FORMING / ACTIVE transitions.
 WAVE_FORMING_Z       = float(os.getenv('WAVE_FORMING_Z', '2.0'))
@@ -1082,6 +1085,55 @@ VALUE_MATURE_PCTILE      = float(os.getenv('VALUE_MATURE_PCTILE', '0.90'))     #
 EVENT_MEMORY_ENABLED     = os.getenv('EVENT_MEMORY_ENABLED', 'true').lower() == 'true'
 EVENT_MEMORY_MAX         = int(os.getenv('EVENT_MEMORY_MAX', '60'))            # cap stored events per contract
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# v3 SECOND AUDIT (2026-08-16): ownership, single-owner decisions, temporal integration
+# ═══════════════════════════════════════════════════════════════════════════════
+# Item 5: ContractValueMemory is THE value owner — its ValueState (CHEAP/FAIR/EXTENDED/MATURE) decides
+# cheapness; the session-low distance becomes a logged component, not an independent veto.
+VALUE_STATE_AUTHORITATIVE = os.getenv('VALUE_STATE_AUTHORITATIVE', 'true').lower() == 'true'
+
+# Item 10-11: package legs may be STAGGERED (algos leg spreads/rolls over tens of seconds). Match
+# co-prints over a short rolling window, not only within one 5s poll, with confidence decaying by
+# temporal separation.
+PKG_WINDOW_S             = float(os.getenv('PKG_WINDOW_S', '120'))    # rolling package-candidate window
+PKG_WINDOW_MIN_LEG       = int(os.getenv('PKG_WINDOW_MIN_LEG', '200'))# a windowed leg must be at least this big
+
+# Item 14: degrade economic-inference confidence when the option/quote/spot observations are materially
+# asynchronous (fast moves make aggressor/response inference unreliable when feeds are skewed).
+SNAPSHOT_MAX_SKEW_MS     = float(os.getenv('SNAPSHOT_MAX_SKEW_MS', '3000'))
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')
+
+
+def runtime_authority() -> list:
+    """v3-audit item 1: ONE machine-readable runtime-authority view. For every behaviour-changing
+    feature: (feature, code_default, env_value, effective_value, decision_owner). 'code_default' is
+    the config.py default; 'effective' is what is actually loaded (env overrides default). This is the
+    single source of truth when debugging the live engine — 'default OFF' prose is noise once running."""
+    def envval(name):
+        return os.getenv(name)   # None if not set in .env → running on the code default
+    rows = [
+        # (feature, code_default, env_var, effective_value, decision_owner)
+        ('QUALIFIED_CONTROL_ENABLED', False, 'QUALIFIED_CONTROL_ENABLED', QUALIFIED_CONTROL_ENABLED, 'side control (qualified.py)'),
+        ('EXIT_ARBITRATION_ENABLED',  False, 'EXIT_ARBITRATION_ENABLED',  EXIT_ARBITRATION_ENABLED,  'exit input arbitration (hold.py)'),
+        ('CAMPAIGN_CONFIDENCE_ENABLED',False,'CAMPAIGN_CONFIDENCE_ENABLED',CAMPAIGN_CONFIDENCE_ENABLED,'own-side thesis exits (hold.py)'),
+        ('REVERSAL_ENABLED',          False, 'REVERSAL_ENABLED',          REVERSAL_ENABLED,          'opposite-side exits/reverse (reversal.py)'),
+        ('MULTI_CAMPAIGN_ENABLED',    False, 'MULTI_CAMPAIGN_ENABLED',    MULTI_CAMPAIGN_ENABLED,    'concurrency (waves.py)'),
+        ('ABSOLUTE_ROUTE_ENABLED',    True,  'ABSOLUTE_ROUTE_ENABLED',    ABSOLUTE_ROUTE_ENABLED,    'activation route (waves.py)'),
+        ('ENTRY_ROUTES_ENABLED',      False, 'ENTRY_ROUTES_ENABLED',      ENTRY_ROUTES_ENABLED,      'entry verdict (entry.py) — supersedes WAVE_LEAD_*'),
+        ('DAILY_ENTRY_LOCK_ENABLED',  False, 'DAILY_ENTRY_LOCK_ENABLED',  DAILY_ENTRY_LOCK_ENABLED,  'one-entry-per-side (engine, authoritative over refractory)'),
+        ('EVENT_SELECT_ENABLED',      False, 'EVENT_SELECT_ENABLED',      EVENT_SELECT_ENABLED,      'contract selection (contract_select.py)'),
+        ('VALUE_MEMORY_ENABLED',      True,  'VALUE_MEMORY_ENABLED',      VALUE_MEMORY_ENABLED,      'value (value_memory.py)'),
+        ('VALUE_STATE_AUTHORITATIVE', True,  'VALUE_STATE_AUTHORITATIVE', VALUE_STATE_AUTHORITATIVE, 'value gate owner (supersedes GATE_MAX_DIST_FROM_LOW)'),
+        ('INVENTORY_ENABLED',         True,  'INVENTORY_ENABLED',         INVENTORY_ENABLED,         'inventory PASS (inventory.py)'),
+        ('PACKAGES_ENABLED',          True,  'PACKAGES_ENABLED',          PACKAGES_ENABLED,          'package discount/veto (packages.py)'),
+        ('PORTFOLIO_RISK_ENABLED',    True,  'PORTFOLIO_RISK_ENABLED',    PORTFOLIO_RISK_ENABLED,    'concurrency risk gate (portfolio.py)'),
+        ('INFO_MASS_ENABLED',         True,  'INFO_MASS_ENABLED',         INFO_MASS_ENABLED,         'discovery blend (mass.py)'),
+        ('DECISION_LEDGER_ENABLED',   True,  'DECISION_LEDGER_ENABLED',   DECISION_LEDGER_ENABLED,   'diagnostics (decision_ledger.py)'),
+        ('EXPIRY_SELECTOR_ENABLED',   True,  'EXPIRY_SELECTOR_ENABLED',   EXPIRY_SELECTOR_ENABLED,   'expiry (SHADOW — nearest still executes)'),
+        ('EVENT_MEMORY_ENABLED',      True,  'EVENT_MEMORY_ENABLED',      EVENT_MEMORY_ENABLED,      'event provenance (event_memory.py)'),
+    ]
+    return [{'feature': f, 'code_default': cd, 'env_value': envval(ev),
+             'effective': eff, 'decision_owner': owner} for (f, cd, ev, eff, owner) in rows]

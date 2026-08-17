@@ -63,8 +63,11 @@ def bar_shock(minute_vols, mark=None) -> dict:
     """Robust one-minute volume shock for one contract from its trailing per-minute series."""
     v = [float(x) for x in (minute_vols or []) if x is not None and x >= 0]
     if len(v) < config.BARSHOCK_MIN_BINS:
+        # v3-audit item 7: an UNSEEDED baseline is NOT a statistically-verified shock — tag it so the
+        # ledger never treats a not-yet-formed opening baseline as confirmed abnormality.
         return {'shock': 0.0, 'current': (round(v[-1]) if v else 0), 'baseline': 0.0,
-                'significant': False, 'notional': None}
+                'significant': False, 'notional': None, 'baseline_quality': 'UNSEEDED',
+                'baseline_n': len(v)}
     cur = v[-1]
     prior = sorted(v[:-1])
     n = len(prior)
@@ -75,8 +78,11 @@ def bar_shock(minute_vols, mark=None) -> dict:
     notional = (cur * mark * 100) if mark else None
     significant = (cur >= config.BARSHOCK_MIN_CONTRACTS and shock >= config.BARSHOCK_MIN_Z
                    and (notional is None or notional >= config.BARSHOCK_MIN_NOTIONAL))
+    # item 7: baseline quality — ESTABLISHED once the prior window is well-filled, else PARTIAL.
+    quality = 'ESTABLISHED' if n >= 2 * config.BARSHOCK_MIN_BINS else 'PARTIAL'
     return {'shock': shock, 'current': round(cur), 'baseline': round(med, 1),
-            'significant': significant, 'notional': round(notional) if notional else None}
+            'significant': significant, 'notional': round(notional) if notional else None,
+            'baseline_quality': quality, 'baseline_n': n}
 
 
 def strike_position(strike, spot, side) -> str:

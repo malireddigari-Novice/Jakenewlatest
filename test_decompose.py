@@ -12,16 +12,16 @@ def ck(name, cond):
     if not cond:
         fails += 1
 
-print("── delta-driven: spot moved, premium tracks delta·ΔS ──")
+print("── spot-driven: spot moved, premium tracks delta·ΔS ──")
 # delta 0.5, spot +2.0 → delta_contrib ~+1.0; ΔP ~+1.0 → mostly spot-explained
 r = dc.decompose(prev_mark=2.0, mark=3.0, delta=0.5, gamma=0.0, spot_prev=100.0, spot=102.0)
-ck("driver DELTA_DRIVEN", r['driver'] == 'DELTA_DRIVEN')
+ck("driver SPOT_DRIVEN", r['driver'] == 'SPOT_DRIVEN')
 ck("delta contribution ≈ +1.0", abs(r['delta_contrib'] - 1.0) < 1e-6)
 
-print("── IV-driven: premium doubled with spot barely moving ──")
+print("── unexplained-driven: premium doubled with spot barely moving ──")
 r = dc.decompose(prev_mark=1.0, mark=2.0, delta=0.4, gamma=0.0, spot_prev=100.0, spot=100.1)
-ck("driver IV_DRIVEN", r['driver'] == 'IV_DRIVEN')
-ck("residual carries most of the move", abs(r['residual']) > abs(r['delta_contrib']))
+ck("driver UNEXPLAINED_DRIVEN (not called 'IV' until greeks exist)", r['driver'] == 'UNEXPLAINED_DRIVEN')
+ck("unexplained component carries most of the move", abs(r['unexplained_premium']) > abs(r['delta_contrib']))
 
 print("── unknown when greeks missing ──")
 ck("missing delta → UNKNOWN", dc.decompose(prev_mark=1.0, mark=2.0, delta=None, gamma=None,

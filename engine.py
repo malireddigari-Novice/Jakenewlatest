@@ -709,6 +709,18 @@ class AttentionEngine:
                             cand[sym]['hedge'] = hedgeflow.assess(
                                 iv_slope=iv_slope, spot_confirms=spot_confirms,
                                 resp_event=resp_event, delta=dlt)
+                        # item 14: cross-feed skew — how stale is the option quote vs this poll?
+                        qts = ((self._snaps.get(sym) or {}).get((best['strike'], dom)) or {}).get('quote_ts')
+                        cand[sym]['quote_ts'] = qts
+                        if qts:
+                            try:
+                                cand[sym]['quote_skew_ms'] = round(
+                                    (now - datetime.fromisoformat(qts)).total_seconds() * 1000, 0)
+                            except Exception:
+                                cand[sym]['quote_skew_ms'] = None
+                        # item 20: the candidate carries ONE authoritative control side (already resolved
+                        # to qualified control upstream when enabled). No downstream module recomputes it.
+                        cand[sym]['authoritative_control'] = dom
                         if config.HYPOTHESES_ENABLED:
                             acc_lbl = flow_response.premium_acceptance(minute_vols, marks)['label']
                             invd = cand[sym].get('inventory') or {}
@@ -737,7 +749,8 @@ class AttentionEngine:
                                 'top_strike': tk, 'shock': top['shock'], 'rel_shock': rel,
                                 'cluster': clus, 'significant': top['significant'],
                                 'event_type': barshock.classify_event(top['shock'], rel, clus),
-                                'position': barshock.strike_position(tk, sf['spot'], dom)}
+                                'position': barshock.strike_position(tk, sf['spot'], dom),
+                                'baseline_quality': top.get('baseline_quality')}
                     # item 17: record the significant event IMMUTABLY (event-level provenance) so future
                     # logic can separate multiple latent campaigns superposed on one contract.
                     if config.EVENT_MEMORY_ENABLED:
@@ -798,6 +811,25 @@ class AttentionEngine:
                     (1 - w) * metrics[s]['attention_share'] + w * metrics[s]['info_share'], 4)
             else:
                 metrics[s]['discovery_share'] = metrics[s]['attention_share']
+        # v3-audit item 6: log Premium / Information / Blended-discovery / Qualified-control RANKS per
+        # ticker so the Decision Ledger can reveal whether the 30% info blend still buries a pristine
+        # cheap event under expensive low-information premium (the NVDA 220P failure mode).
+        for s in metrics:
+            qc = metrics[s].get('qualified_control') or {}
+            dom = metrics[s].get('dominant_side')
+            metrics[s]['qc_strength'] = ((qc.get('q_call_control', 0.0) if dom == 'CALL'
+                                          else qc.get('q_put_control', 0.0)) if qc else 0.0)
+
+        def _rank_by(key):
+            order = sorted(metrics, key=lambda s: metrics[s].get(key, 0.0), reverse=True)
+            return {s: i + 1 for i, s in enumerate(order)}
+        prem_r, info_r = _rank_by('ticker_mass'), _rank_by('ticker_info')
+        disc_r, qc_r = _rank_by('discovery_share'), _rank_by('qc_strength')
+        for s in metrics:
+            metrics[s]['premium_mass_rank'] = prem_r[s]
+            metrics[s]['info_mass_rank'] = info_r[s]
+            metrics[s]['discovery_rank'] = disc_r[s]
+            metrics[s]['qualified_control_rank'] = qc_r[s]
         ranked = mass.rank_attention(metrics)
         return ranked, {r['symbol']: r for r in ranked}, cand, market_mass
 
@@ -1185,21 +1217,29 @@ class AttentionEngine:
             logger.info("ENTRY-ALLOW %s %s broad-surface campaign overrides single-strike notional "
                         "(%s breadth=%d ladder=$%.0f)", sym, side, surf.get('classification'),
                         surf.get('breadth'), surf.get('breadth_adjusted_strength'))
-        if not route_ok and c['dist_low'] > config.GATE_MAX_DIST_FROM_LOW:
-            # item 4: the session low is a crude, corruptible value anchor (a bad $0.05 open, a wide
-            # spread). If ContractValueMemory (robust percentile over real history) says the mark is
-            # still CHEAP for this contract, don't reject on the session-low ratio alone.
-            vm = c.get('value') or {}
-            if config.VALUE_MEMORY_ENABLED and vm.get('n', 0) >= config.BARSHOCK_MIN_BINS and vm.get('is_cheap'):
-                logger.info("VALUE-OVERRIDE %s %s session-low dist %.2f but robust value cheap (%s)",
-                            sym, side, c['dist_low'], vm.get('reason'))
-            else:
-                # §11: distinguish 'discovered early, executed late' (detection latency, fixable) from
-                # 'only recognised after it extended' (a valid reject) via premium drift since capture.
-                chased_label = valuemod.classify_chased(c.get('rel_premium'))
-                logger.info("ENTRY-REJECT %s %s chased (%.2f, drift=%.2fx → %s)", sym, side,
-                            c['dist_low'], c.get('rel_premium') or 1.0, chased_label)
-                return chased_label
+        # v3-audit item 5: ONE authoritative value owner. When ContractValueMemory has real history it
+        # OWNS the CHEAP/FAIR/EXTENDED/MATURE decision — EXTENDED/MATURE rejects, CHEAP/FAIR allows, and
+        # the session-low distance is merely a logged component (not an independent veto that can fight
+        # ValueMemory). Only when there is NO value history does the legacy session-low gate govern.
+        vm = c.get('value') or {}
+        value_owned = (config.VALUE_MEMORY_ENABLED and config.VALUE_STATE_AUTHORITATIVE
+                       and vm.get('n', 0) >= config.BARSHOCK_MIN_BINS
+                       and vm.get('value_state') not in (None, 'UNKNOWN'))
+        if not route_ok and value_owned:
+            vs = vm.get('value_state')
+            if vs in ('EXTENDED', 'MATURE'):
+                logger.info("ENTRY-REJECT %s %s value=%s (%s; session-low dist %.2f is a component) "
+                            "— too rich by robust value", sym, side, vs, vm.get('reason'), c['dist_low'])
+                return 'MISSED_DUE_TO_PRICE_EXTENSION'
+            logger.info("VALUE-OK %s %s value=%s owns the decision (session-low dist %.2f = component only)",
+                        sym, side, vs, c['dist_low'])
+        elif not route_ok and c['dist_low'] > config.GATE_MAX_DIST_FROM_LOW:
+            # no value history yet → legacy session-low gate. §11: distinguish 'discovered early,
+            # executed late' (fixable latency) from 'only recognised after it extended' (valid reject).
+            chased_label = valuemod.classify_chased(c.get('rel_premium'))
+            logger.info("ENTRY-REJECT %s %s chased (%.2f, drift=%.2fx → %s) [no value history]", sym, side,
+                        c['dist_low'], c.get('rel_premium') or 1.0, chased_label)
+            return chased_label
         ok, why = execution.check_executable(best, now)
         if not ok:
             logger.info("ENTRY-REJECT %s %s execution=%s", sym, side, why)
@@ -1459,9 +1499,9 @@ class AttentionEngine:
                         pex['n_call'], pex['n_put'], f"{pex['net_delta_notional']:,}")
         dec = c.get('decomp')
         if config.DECOMPOSE_ENABLED and dec and dec.get('driver') != 'UNKNOWN':
-            logger.info("  DECOMP %s %s ΔP=%.3f driver=%s (delta=%.3f gamma=%.3f resid=%.3f)", sym, side,
+            logger.info("  DECOMP %s %s ΔP=%.3f driver=%s (delta=%.3f gamma=%.3f unexplained=%.3f)", sym, side,
                         dec.get('dP') or 0.0, dec['driver'], dec.get('delta_contrib') or 0.0,
-                        dec.get('gamma_contrib') or 0.0, dec.get('residual') or 0.0)
+                        dec.get('gamma_contrib') or 0.0, dec.get('unexplained_premium') or 0.0)
         hr = c.get('hedge')
         if config.HEDGE_FLOW_ENABLED and hr and hr.get('read') != 'NEUTRAL':
             logger.info("  HEDGE %s %s %s (dir=%.2f conv=%.2f) — %s", sym, side, hr['read'],

@@ -685,6 +685,52 @@ limitation; time-of-day BarVolumeShock (item 7 of the 8/16 pass) awaits multi-se
 inventory reconstruction under multiple superposed participants (items 16-17) is the next research
 problem — event provenance is now stored to make it *possible*, not yet *solved*.
 
+### Second integration audit (2026-08-16) — ownership & single-owner decisions
+
+Focus: not features but **ownership** — proving which behavior owns each decision, killing stale
+legacy paths, and making every rejection answerable from the ledger. Code tested (40/40 files) + smoke.
+
+**Code changes:**
+- **Item 1 — one runtime-authority table.** `config.runtime_authority()` returns
+  `feature / code_default / env_value / effective / decision_owner` for every behaviour flag, logged at
+  startup as `RUNTIME-AUTHORITY …`. This is the single source of truth — "default OFF" prose is noise
+  once running. (The knob tables above still show *code defaults*; the effective values are here.)
+- **Item 2 — strict reversal ownership.** CampaignConfidence answers "is MY thesis alive?"; only
+  ReversalCluster may authorize an **opposite-side** exit. A confidence collapse whose dominant cause is
+  CONTROL/OPP is now **suppressed** when `REVERSAL_ENABLED` — closing the GOOGL/NVDA backdoor where weak
+  opposite flow indirectly exits. (Tested both ways: suppressed on; exits with reversal off.)
+- **Item 5 — one value owner.** ContractValueMemory's **ValueState (CHEAP/FAIR/EXTENDED/MATURE)** now
+  *owns* the value gate: EXTENDED/MATURE rejects, CHEAP/FAIR allows, and `GATE_MAX_DIST_FROM_LOW` is a
+  logged component — it governs only when there is no value history.
+- **Item 6 — discovery ranks logged.** Every candidate records PremiumMassRank / InformationMassRank /
+  BlendedDiscoveryRank / QualifiedControlRank in the ledger, so we can *see* whether the 0.30 info
+  blend still buries a pristine cheap event (the NVDA 220P failure mode) — data before we retune.
+- **Item 7 — barshock baseline quality.** `bar_shock` tags `ESTABLISHED / PARTIAL / UNSEEDED`; an
+  UNSEEDED opening baseline is never treated as a statistically-confirmed shock (logged in the ledger).
+- **Item 13 — honest premium decomposition.** ΔP − δΔS − ½γΔS² is the **UNEXPLAINED premium
+  component** (driver `SPOT_DRIVEN` / `UNEXPLAINED_DRIVEN` / `MIXED`), not "IV" — it also holds theta,
+  vega nonlinearity, quote noise and timestamp skew until real greeks + sync exist.
+- **Item 14 — cross-feed skew.** The ledger stores `quote_ts` + `quote_skew_ms`; `SNAPSHOT_MAX_SKEW_MS`
+  is the threshold above which economic inference should be discounted.
+- **Item 20 — authoritative candidate fields.** The candidate carries one `authoritative_control`
+  (already resolved to qualified control upstream) and one `value_state`; no downstream module
+  recomputes a conflicting version. Same-shape single-owner discipline for control/value/exit.
+- **Item 4 — legacy tournament knobs quarantined.** `WAVE_LEAD_SHARE` / `WAVE_LEAD_MARGIN` are marked
+  **LEGACY / bypassed under `ENTRY_ROUTES`** in config — they cannot silently re-enter eligibility.
+
+**Verified / documented (behavior already correct):**
+- **Item 3** trade-lock ≠ observation-lock: a consumed daily side-slot blocks *execution* only;
+  detection, classification, event-memory and the ledger keep recording second same-side waves.
+- **Item 9** EOD flatten ⇒ POSITION=FLAT; only **informational campaign memory** survives overnight
+  (never an open position). **Item 16** inventory stays multi-participant/probabilistic; **item 15**
+  multiple price anchors (first-abnormal/onset/basis/entry/reinforcement/peak) partly captured today.
+
+**Deferred to the frozen-architecture research phase (as the audit recommends):** temporal
+package/roll graphs (items 10-11 — `PKG_WINDOW_S` is the forward hook; today's resolver uses the
+30-180s windowed surface); T+1 OI as a *learning label* (item 10 of the list); corporate-action
+contract-identity checks (item 13 of the list, matters beyond Mag-7); and the backtestable-vs-live-tape
+validation split (items 18-19). The next cycle is **collecting Decision-Ledger data, not new indicators.**
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

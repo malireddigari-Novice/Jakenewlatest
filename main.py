@@ -126,6 +126,15 @@ def _build_engine() -> AttentionEngine:
     mode = "LIVE execution" if config.ALPACA_ENABLED else "SHADOW (no orders)"
     log.info("Jakenew ready — %s | Schwab OI=%s | Mag7=%s",
              mode, "on" if schwab else "off", ",".join(config.MAG7))
+    # v3-audit item 1: one machine-readable RUNTIME-AUTHORITY table at startup — effective values +
+    # decision owners, not code-default prose. This is the source of truth when debugging live.
+    try:
+        for r in config.runtime_authority():
+            log.info("RUNTIME-AUTHORITY %-28s default=%-5s env=%-5s effective=%-5s owner=%s",
+                     r['feature'], str(r['code_default']), str(r['env_value']),
+                     str(r['effective']), r['decision_owner'])
+    except Exception:
+        log.warning("runtime-authority table failed", exc_info=True)
     return AttentionEngine(data, execu, schwab)
 
 

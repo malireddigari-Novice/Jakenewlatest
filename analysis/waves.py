@@ -437,6 +437,14 @@ class WaveEngine:
                    f"dist={int(bool(f.get('dist_high')))} prem={int(f.get('progressing', True))} "
                    f"hl={int(f.get('higher_low', True))} active={int(bool(f.get('active')))})")
         if new_conf < config.HOLD_EXIT_THRESHOLD:
+            # v3-audit item 2 — STRICT ownership invariant: CampaignConfidence answers "is MY thesis
+            # still alive?"; only ReversalCluster may authorize an OPPOSITE-side thesis exit. So even if
+            # confidence eroded, a dominant OPPOSITE-side cause (control loss / opposite strengthening)
+            # must NOT exit here when REVERSAL owns opposite exits — that closes the GOOGL/NVDA backdoor.
+            if config.REVERSAL_ENABLED and dominant in ('CONTROL', 'OPP_SIDE'):
+                log.append(f"{w.wave_id} CONFIDENCE-EXIT SUPPRESSED cause={dominant} — ReversalCluster "
+                           f"owns opposite-side exits (item 2)")
+                return None
             log.append(f"{w.wave_id} CONFIDENCE-EXIT conf={new_conf:.2f}<{config.HOLD_EXIT_THRESHOLD} "
                        f"cause={dominant}")
             return hold.exit_reason_from(dominant, f)
