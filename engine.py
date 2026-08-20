@@ -90,6 +90,8 @@ class AttentionEngine:
         self._expiry_rows: dict = {}       # #8: last multi-expiry rows per symbol (cross-expiry direction)
         self._dq: dict = {}                # #11-12: (sym) -> {contract: quote confidence 0..1}
         self._code_version, self._config_hash = self._provenance()   # item 17: ledger stamps
+        self._nm_ts: dict = {}             # near-miss alert throttle: (sym,side) -> last alert ts
+        self._attr = self._new_attrition() # EOD entry-funnel attrition counters
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
 
@@ -99,6 +101,14 @@ class AttentionEngine:
         if config.CROSS_SESSION_MEMORY_ENABLED and self.state.get('day'):
             self._hist['date'] = date.fromisoformat(self.state['day'])
         self._reconcile_positions()
+
+    def _new_attrition(self) -> dict:
+        """Fresh EOD entry-funnel counters (audit item 3/6). Sets are keyed by wave_id so a candidate
+        re-evaluated across many polls is counted once per stage."""
+        from collections import defaultdict
+        return {'polls': 0, 'evaluated': set(), 'qualified': set(), 'entry_ready': set(),
+                'entered': set(), 'near_miss_alerts': 0,
+                'hard_veto': defaultdict(set), 'near_miss': defaultdict(set)}
 
     def _provenance(self):
         """(code_version, config_hash) for the Decision Ledger — so a record is tied to exactly what
@@ -182,6 +192,8 @@ class AttentionEngine:
                     logger.info("CAMPAIGN MEMORY: carried %d overnight campaign(s) into %s: %s",
                                 len(carried), today, ", ".join(carried))
             self.state['day'] = today.isoformat()
+            self._attr = self._new_attrition()     # reset the EOD attrition funnel each session
+            self._nm_ts.clear()
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
     def _reconcile_positions(self) -> None:
@@ -371,6 +383,7 @@ class AttentionEngine:
             return
 
         market_ok = market_mass >= config.ATTENTION_MIN_TOTAL
+        self._attr['polls'] += 1
         self._log_waves(ranked, market_mass, market_ok)
         # item 12: continuous attention-transfer — a destination accelerating while another cools is a
         # PRIORITY INVESTIGATION signal EVERY poll, independent of any exit (both may stay valid). This
@@ -438,8 +451,10 @@ class AttentionEngine:
                         logger.info("EXPIRY-SELECT %s %s → %s%s", en['ticker'], en['side'], sel['reason'],
                                     '' if config.EXPIRY_SELECTOR_SHADOW else ' (LIVE reroute)')
                 rej = self._open_wave(en, cand, ranked, market_mass, now)   # None on entry; §19 label on reject
-                if rej is None and config.DAILY_ENTRY_LOCK_ENABLED:
-                    self.state.setdefault('entered_today', []).append(slot)
+                if rej is None:
+                    self._attr['entered'].add(en.get('wave_id'))
+                    if config.DAILY_ENTRY_LOCK_ENABLED:
+                        self.state.setdefault('entered_today', []).append(slot)
                 # item 17: Decision Ledger — record the outcome with EVERY hard veto (not just the first).
                 cc = cand.get(en['ticker'])
                 self._log_decision(now, en['ticker'], en['side'], metrics_by.get(en['ticker']), cc,
@@ -1120,6 +1135,46 @@ class AttentionEngine:
         except Exception:
             logger.warning("decision-ledger write failed (non-fatal)", exc_info=True)
 
+    def _maybe_near_miss_alert(self, sym, side, c, m, dec, now) -> None:
+        """Audit item 2: RESEARCH-ONLY 🟡 WATCH alert for a genuinely-scored near-miss (no hard veto,
+        route in the approved set, qualified control, low distribution, value not EXTENDED/MATURE).
+        Never places an order. Throttled per (ticker,side). Restores visibility while 0.55 stays the
+        execution boundary — and collects live evidence on whether 0.50-0.54 candidates are tradeable."""
+        if not config.NEAR_MISS_ALERT_ENABLED:
+            return
+        route = dec.get('route')
+        if route not in config.NEAR_MISS_ROUTES:
+            return
+        vs = (c.get('value') or {}).get('value_state')
+        if vs in ('EXTENDED', 'MATURE'):
+            return
+        if (c.get('dist_prob') or 0.0) > config.NEAR_MISS_MAX_DIST_PROB:
+            return
+        qcs = m.get('qc_strength', 0.0) or 0.0                 # qualified control strength on the dom side
+        ctrl = m.get('call_control', 0.0) if side == 'CALL' else m.get('put_control', 0.0)
+        if max(qcs, ctrl or 0.0) < 0.55:                       # some real directional control required
+            return
+        key = (sym, side)
+        last = self._nm_ts.get(key)
+        if last and (now - last).total_seconds() < config.NEAR_MISS_MIN_INTERVAL_S:
+            return
+        self._nm_ts[key] = now
+        self._attr['near_miss_alerts'] += 1
+        best = c.get('best') or {}
+        drag = ', '.join(f"{k} {v:+.2f}" for k, v in (dec.get('top_drag') or [])[:2])
+        try:
+            notify.near_miss_card(sym=sym, side=side, strike=best.get('strike'), route=route,
+                                  score=dec['score'], threshold=config.ENTRY_ROUTE_MIN_SCORE,
+                                  shortfall=dec.get('shortfall'), value_state=vs,
+                                  qual_control=max(qcs, ctrl or 0.0), dist_prob=c.get('dist_prob'),
+                                  archetype=dec.get('archetype'), info_rank=m.get('info_mass_rank'),
+                                  acceptance=(c.get('acceptance') or {}).get('label'), top_drag=drag, now=now)
+        except Exception:
+            logger.warning("near-miss alert card failed (non-fatal)", exc_info=True)
+        logger.info("NEAR-MISS-WATCH %s %s %s route=%s score=%.2f/%.2f value=%s qctrl=%.2f drag=[%s] "
+                    "— RESEARCH ONLY, no entry", sym, side, best.get('strike'), route, dec['score'],
+                    config.ENTRY_ROUTE_MIN_SCORE, vs, max(qcs, ctrl or 0.0), drag)
+
     def _open_wave(self, en, cand, ranked, market_mass, now) -> None:
         sym, side, w, m = en['ticker'], en['side'], en['wave'], en['metric']
         c = cand.get(sym)
@@ -1133,15 +1188,30 @@ class AttentionEngine:
         if config.ENTRY_ROUTES_ENABLED:
             dec = entry.decide(c, m)
             c['route_decision'] = dec           # audit: carry the full decomposition into the ledger
+            wid = en.get('wave_id')
+            self._attr['evaluated'].add(wid)
             if not dec['pass']:
-                # audit decomposition: show the weighted contributions + the top dimensions dragging
-                # the score below threshold, so a near-miss is answerable without reverse-engineering.
                 drag = ' '.join(f"{k}-{v:.2f}" for k, v in (dec.get('top_drag') or []))
-                logger.info("ENTRY-REJECT %s %s route=%s asym=%.2f<%.2f (%s) | contrib=%s | top_drag=[%s]",
-                            sym, side, dec.get('route'), dec['score'], config.ENTRY_ROUTE_MIN_SCORE,
-                            dec['reason'], dec.get('contributions'), drag)
+                if dec['score_status'] == 'HARD_VETO':
+                    # audit item 1: a veto is NOT a 0.00 score — report raw_score + status + all vetoes.
+                    for fam in dec.get('hard_vetoes') or []:
+                        self._attr['hard_veto'][fam].add(wid)
+                    logger.info("ENTRY-REJECT %s %s route=%s HARD_VETO=%s raw_score=%.2f (%s) top_drag=[%s]",
+                                sym, side, dec.get('route'), ','.join(dec.get('hard_vetoes') or []),
+                                dec.get('raw_score') or 0.0, dec['reason'], drag)
+                else:
+                    # genuinely SCORED but below threshold — the near-miss population.
+                    self._attr['qualified'].add(wid)
+                    logger.info("ENTRY-REJECT %s %s route=%s asym=%.2f<%.2f (%s) | contrib=%s | top_drag=[%s]",
+                                sym, side, dec.get('route'), dec['score'], config.ENTRY_ROUTE_MIN_SCORE,
+                                dec['reason'], dec.get('contributions'), drag)
+                    if dec['score'] >= config.NEAR_MISS_MIN_SCORE:
+                        self._attr['near_miss'][dec.get('route')].add(wid)
+                        self._maybe_near_miss_alert(sym, side, c, m, dec, now)
                 return dec['reason']
             route_ok = True
+            self._attr['qualified'].add(wid)
+            self._attr['entry_ready'].add(wid)
             logger.info("ENTRY-ROUTE %s %s %s asym=%.2f (archetype=%s) — soft gates bypassed",
                         sym, side, dec['route'], dec['score'], dec['archetype'])
             # P1 overnight hysteresis: a surviving opposite-side campaign raises the bar (Friday's
@@ -1642,4 +1712,26 @@ class AttentionEngine:
             self._close(pos, mark, now, reason='EOD_FLATTEN')
         if self.exec and config.ALPACA_ENABLED:
             self.exec.close_all_positions()
+        self._attrition_report()
         state.save(self.state)
+
+    def _attrition_report(self) -> None:
+        """Audit item 3/6: EOD entry-funnel + hard-veto + near-miss breakdown, so we can see exactly
+        where candidates are lost (ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ENTRY_READY → ENTER)."""
+        if not config.ATTRITION_REPORT_ENABLED:
+            return
+        a = self._attr
+        hv = {k: len(v) for k, v in a['hard_veto'].items()}
+        nm = {k: len(v) for k, v in a['near_miss'].items()}
+        logger.info("ATTRITION-REPORT polls=%d | ACTIVE_EVENT(evaluated)=%d → QUALIFIED_CAMPAIGN(no-veto)=%d "
+                    "→ ENTRY_READY=%d → ENTERED=%d | near-miss-alerts=%d",
+                    a['polls'], len(a['evaluated']), len(a['qualified']), len(a['entry_ready']),
+                    len(a['entered']), a['near_miss_alerts'])
+        logger.info("ATTRITION-REPORT hard-veto by reason: %s", hv or '{}')
+        logger.info("ATTRITION-REPORT near-miss (0.45-0.55) by route: %s", nm or '{}')
+        try:
+            notify.send(f"📊 Jakenew EOD attrition — ACTIVE {len(a['evaluated'])} → qualified "
+                        f"{len(a['qualified'])} → entry-ready {len(a['entry_ready'])} → entered "
+                        f"{len(a['entered'])} | near-miss alerts {a['near_miss_alerts']} | vetoes {hv or '{}'}")
+        except Exception:
+            pass

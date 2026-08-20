@@ -82,5 +82,23 @@ ck("route decision exposes top_drag (3 dims)", len(_d.get('top_drag') or [])==3)
 ck("contributions sum to the score", abs(sum(_d['contributions'].values()) - _d['score']) < 1e-6)
 ck("shortfall is threshold - score when failing", _d['shortfall'] >= 0)
 
+
+# audit item 1: a HARD VETO must NOT collapse to score=0.00 — null score + status + raw_score + all vetoes
+_veto_c = {'side':'PUT','archetype':{'archetype':'DISTRIBUTION'},'dist_prob':0.9,'dist_low':3.0,
+           'shape':'HEAVY_VOLUME_NEGATIVE_RESPONSE','acceptance':{'label':'REJECTION'},
+           'notional':5, 'self_sust':0.5,'cont_prob':0.6,'resp_event':0.0,'surface':{}}
+_vd = entry.decide(_veto_c, {'rank':2,'attention_share':0.3,'mass_z':4.0,'put_control':0.8})
+ck("hard veto -> score is None (not 0.00)", _vd['score'] is None)
+ck("hard veto -> score_status HARD_VETO", _vd['score_status'] == 'HARD_VETO')
+ck("hard veto -> raw_score still computed", isinstance(_vd['raw_score'], float))
+ck("hard veto -> ALL applicable vetoes listed", len(_vd['hard_vetoes']) >= 2)
+ck("hard veto families include PREMIUM_REJECTION + OBJECTIVELY_LATE",
+   'PREMIUM_REJECTION' in _vd['hard_vetoes'] and 'OBJECTIVELY_LATE' in _vd['hard_vetoes'])
+# a clean scored candidate keeps SCORED status with a real number
+_sd = entry.decide({'side':'PUT','archetype':{'archetype':'CROSS_EXPIRY_ACCUMULATION'},'notional':1,
+                    'dist_low':1.2,'self_sust':0.55,'cont_prob':0.6,'resp_event':0.0,'surface':{},'acceptance':{}},
+                   {'rank':3,'attention_share':0.16,'mass_z':2.5,'put_control':0.78})
+ck("no-veto -> score_status SCORED with a numeric score", _sd['score_status']=='SCORED' and isinstance(_sd['score'],float))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

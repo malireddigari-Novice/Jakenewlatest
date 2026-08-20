@@ -145,6 +145,33 @@ def entry_card(board: dict, *, symbol: str, side: str, strike: float, expiry: st
     })
 
 
+def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, threshold: float,
+                   shortfall, value_state, qual_control, dist_prob, archetype, info_rank,
+                   acceptance, top_drag: str, now: datetime) -> None:
+    """🟡 RESEARCH-ONLY near-miss WATCH — a genuinely-scored candidate just under the execution
+    boundary. Explicitly NOT a trade; collects live evidence on whether 0.50-0.54 events are tradeable."""
+    fields = [
+        {'name': 'Route score', 'value': f"**{score:.2f}** / {threshold:.2f}  (short {shortfall})", 'inline': True},
+        {'name': 'Archetype', 'value': f"{archetype}\n`{route}`", 'inline': True},
+        {'name': 'Top drag', 'value': top_drag or '—', 'inline': True},
+        {'name': 'Qualified control', 'value': f"{100*(qual_control or 0):.0f}%", 'inline': True},
+        {'name': 'Value', 'value': f"{value_state}", 'inline': True},
+        {'name': 'Distribution', 'value': f"{(dist_prob or 0):.2f}", 'inline': True},
+        {'name': 'Acceptance', 'value': f"{acceptance or '—'}", 'inline': True},
+        {'name': 'Info-mass rank', 'value': f"#{info_rank}" if info_rank else '—', 'inline': True},
+        {'name': '​', 'value': '​', 'inline': True},
+    ]
+    _post({
+        'title': f"🟡 NEAR-MISS WATCH  {sym} {side} {strike:g}" if strike is not None else f"🟡 NEAR-MISS WATCH  {sym} {side}",
+        'description': (f"High-quality event **{score:.2f}/{threshold:.2f}** — below the entry boundary. "
+                        f"**RESEARCH ONLY — no order placed.** Watching whether this converts."),
+        'color': _AMBER,
+        'fields': fields,
+        'footer': {'text': "Jakenew · near-miss research alert (not an entry)"},
+        'timestamp': now.astimezone().isoformat(),
+    })
+
+
 def scale_card(pos: dict, *, sold: int, remaining: int, price: float, reason: str,
                pnl: float, mode: str, now: datetime) -> None:
     _post({

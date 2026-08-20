@@ -731,6 +731,35 @@ package/roll graphs (items 10-11 — `PKG_WINDOW_S` is the forward hook; today's
 contract-identity checks (item 13 of the list, matters beyond Mag-7); and the backtestable-vs-live-tape
 validation split (items 18-19). The next cycle is **collecting Decision-Ledger data, not new indicators.**
 
+### Entry-bottleneck observability (2026-08-20) — visibility without loosening execution
+
+Three sessions (08/17–08/19) produced 0 entries. The audit found the choke point is the *route stage*,
+not discovery — and that `asym=0.00` was a **sentinel for a hard veto**, not a weak score (it conflated
+"terrible" with "not computed"). Fixes — **execution boundary unchanged** (`ENTRY_ROUTE_MIN_SCORE`
+stays 0.55):
+
+- **Item 1 — kill the 0.00 ambiguity.** `entry.decide()` now always computes the **raw** route score
+  (even under a veto) and reports `score_status` (`SCORED` / `HARD_VETO`), `score` = null under a veto
+  (never 0.00), `raw_score` = what it would have scored, and `hard_vetoes[]` = **every** veto family
+  that applied (`DISTRIBUTION` / `EXIT_SHAPE` / `PREMIUM_REJECTION` / `OBJECTIVELY_LATE` / …). All in
+  the ledger.
+- **Item 2 — 🟡 near-miss WATCH tier (RESEARCH ONLY, never an order).** A genuinely-scored candidate
+  in `[NEAR_MISS_MIN_SCORE 0.45, 0.55)` with no hard veto, qualified control, low distribution, a
+  non-EXTENDED/MATURE ValueState, and an approved route posts a Discord amber card ("RESEARCH ONLY —
+  no order") with score/shortfall/top-drag/value/control. Throttled per (ticker,side). Restores
+  visibility and collects live evidence on whether 0.50–0.54 events convert.
+- **Items 3/6 — EOD attrition report.** `ATTRITION-REPORT` logs (+ Discord) the entry funnel
+  **ACTIVE_EVENT(evaluated) → QUALIFIED_CAMPAIGN(no-veto) → ENTRY_READY → ENTERED**, plus hard-veto
+  counts by family and near-miss counts by route — so we see exactly where candidates are lost.
+
+**Deliberately NOT changed (per the brief):** the execution threshold (item 9), and the route-score
+*math* — the audit's point that a route named `CROSS_STRIKE` doesn't actually *score* cross-strike
+synchronization (routes share the same 7 ingredients — rank/notional/control/response/abn/persist/cheap
+— with only different weights) is **documented as a real gap** but not rewired, because that would
+change execution. That, plus the **forward-outcome replay** (score-bucket MFE/MAE by archetype + the
+hard-veto false-positive study) is the evidence-based next phase — the near-miss stream + attrition
+report are the instruments that make it possible.
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

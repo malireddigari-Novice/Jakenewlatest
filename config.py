@@ -1102,6 +1102,24 @@ PKG_WINDOW_MIN_LEG       = int(os.getenv('PKG_WINDOW_MIN_LEG', '200'))# a window
 # asynchronous (fast moves make aggressor/response inference unreliable when feeds are skewed).
 SNAPSHOT_MAX_SKEW_MS     = float(os.getenv('SNAPSHOT_MAX_SKEW_MS', '3000'))
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY-BOTTLENECK OBSERVABILITY (2026-08-20) — restore visibility WITHOUT loosening execution
+# ═══════════════════════════════════════════════════════════════════════════════
+# Near-miss WATCH tier (RESEARCH ONLY — never places an order). A genuinely-scored (no hard veto)
+# candidate in [NEAR_MISS_MIN_SCORE, ENTRY_ROUTE_MIN_SCORE) that has qualified control, low
+# distribution and a non-EXTENDED/MATURE ValueState produces a Discord 🟡 alert so we can SEE what
+# Jakenew sees again and collect live evidence on whether 0.50-0.54 candidates are worth trading.
+NEAR_MISS_ALERT_ENABLED = os.getenv('NEAR_MISS_ALERT_ENABLED', 'true').lower() == 'true'
+NEAR_MISS_MIN_SCORE     = float(os.getenv('NEAR_MISS_MIN_SCORE', '0.45'))
+NEAR_MISS_ROUTES        = [r.strip() for r in os.getenv(
+    'NEAR_MISS_ROUTES', 'CROSS_STRIKE,PERSISTENT_BUILD,SHAKEOUT_RECOVERY,FAST_SHOCK,STAIR_STEP').split(',') if r.strip()]
+NEAR_MISS_MIN_INTERVAL_S = int(os.getenv('NEAR_MISS_MIN_INTERVAL_S', '600'))  # throttle per (ticker,side)
+NEAR_MISS_MAX_DIST_PROB  = float(os.getenv('NEAR_MISS_MAX_DIST_PROB', '0.40'))
+
+# EOD attrition report — the entry funnel + hard-veto breakdown + near-miss buckets, so we can see
+# exactly where candidates are lost (the audit's ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ENTRY_READY view).
+ATTRITION_REPORT_ENABLED = os.getenv('ATTRITION_REPORT_ENABLED', 'true').lower() == 'true'
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')

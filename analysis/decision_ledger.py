@@ -63,9 +63,15 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
         'cont_prob': c.get('cont_prob'), 'self_sust': c.get('self_sust'),
         # expression
         'candidate_expiry': candidate_expiry, 'candidate_strike': candidate_strike,
-        # route-score decomposition (audit): the 7-dimension asymmetry breakdown + what dragged it down
+        # route-score decomposition (audit): the 7-dimension asymmetry breakdown + what dragged it down.
+        # item 1: route_score is NULL under a hard veto (never 0.00) — route_score_status disambiguates,
+        # route_raw_score is what it WOULD have scored, route_hard_vetoes names every veto that applied.
         'route': (c.get('route_decision') or {}).get('route'),
         'route_score': (c.get('route_decision') or {}).get('score'),
+        'route_score_status': (c.get('route_decision') or {}).get('score_status'),
+        'route_raw_score': (c.get('route_decision') or {}).get('raw_score'),
+        'route_hard_vetoes': (c.get('route_decision') or {}).get('hard_vetoes'),
+        'route_primary_veto': (c.get('route_decision') or {}).get('primary_veto'),
         'route_evidence': (c.get('route_decision') or {}).get('evidence'),
         'route_contributions': (c.get('route_decision') or {}).get('contributions'),
         'route_top_drag': (c.get('route_decision') or {}).get('top_drag'),

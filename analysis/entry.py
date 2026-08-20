@@ -49,20 +49,36 @@ _EXIT_SHAPES = {'MATURE_SCALING_ACTIVITY', 'DISTRIBUTION_AT_PREMIUM_HIGH',
                 'HEAVY_VOLUME_NEGATIVE_RESPONSE', 'ISOLATED_PRINT'}
 
 
-def hard_veto(c: dict):
-    """§10-A data-derived hard vetoes. Returns a §19 reject label or None. (Microstructure vetoes —
-    stale/spread/liquidity/execution — stay in the engine.)"""
+def hard_vetoes(c: dict) -> list:
+    """§10-A data-derived hard vetoes — returns ALL that apply (not just the first), each as a named
+    veto family, so the ledger can attribute the kill precisely (audit item 1/8). (Microstructure
+    vetoes — stale/spread/liquidity/execution — stay in the engine.)"""
+    v = []
     if (c.get('dist_prob', 0.0) or 0.0) >= config.ENTRY_HARD_DIST:
-        return 'ECONOMICALLY_VALID_REJECTION'                 # coherent distribution
+        v.append('DISTRIBUTION')                              # coherent distribution
     if (c.get('archetype') or {}).get('archetype') == 'DISTRIBUTION':
-        return 'ECONOMICALLY_VALID_REJECTION'                 # never route-enter a distribution campaign
+        v.append('DISTRIBUTION_ARCHETYPE')                    # never route-enter a distribution campaign
     if c.get('shape') in _EXIT_SHAPES:
-        return 'ECONOMICALLY_VALID_REJECTION'                 # mature / exit / stale event shape
+        v.append('EXIT_SHAPE')                                # mature / exit / stale event shape
     if config.ACCEPTANCE_ENABLED and (c.get('acceptance') or {}).get('label') == 'REJECTION':
-        return 'ECONOMICALLY_VALID_REJECTION'                 # heavy volume but premium making lower lows
+        v.append('PREMIUM_REJECTION')                         # heavy volume but premium making lower lows
     if (c.get('dist_low', 1.0) or 1.0) > config.ENTRY_HARD_EXTENSION:
-        return 'MISSED_DUE_TO_PRICE_EXTENSION'                # objectively-late extension
-    return None
+        v.append('OBJECTIVELY_LATE')                          # objectively-late extension
+    return v
+
+
+# map veto family → the §19 reject label the engine returns
+_VETO_LABEL = {'DISTRIBUTION': 'ECONOMICALLY_VALID_REJECTION',
+               'DISTRIBUTION_ARCHETYPE': 'ECONOMICALLY_VALID_REJECTION',
+               'EXIT_SHAPE': 'ECONOMICALLY_VALID_REJECTION',
+               'PREMIUM_REJECTION': 'ECONOMICALLY_VALID_REJECTION',
+               'OBJECTIVELY_LATE': 'MISSED_DUE_TO_PRICE_EXTENSION'}
+
+
+def hard_veto(c: dict):
+    """Back-compat single-label helper (first applicable veto, or None)."""
+    v = hard_vetoes(c)
+    return _VETO_LABEL[v[0]] if v else None
 
 
 def evidence(c: dict, m: dict) -> dict:
@@ -95,22 +111,27 @@ def evidence(c: dict, m: dict) -> dict:
 
 
 def decide(c: dict, m: dict) -> dict:
-    """Return {pass, score, route, archetype, evidence, reason}. A hard veto short-circuits to fail."""
-    veto = hard_veto(c)
-    if veto:
-        return {'pass': False, 'score': 0.0, 'route': None,
-                'archetype': (c.get('archetype') or {}).get('archetype'), 'evidence': {}, 'reason': veto}
+    """Return the full route decision. Audit item 1: a HARD VETO no longer collapses to score=0.00 —
+    the raw route score is ALWAYS computed (so we know what it WOULD have scored), reported as
+    `raw_score`, while `score` is null under a veto and `score_status` distinguishes the two states:
+        SCORED    → score is a genuine continuous asymmetry
+        HARD_VETO → score=None; raw_score is what it would have scored; hard_vetoes[] names why."""
     arch = (c.get('archetype') or {}).get('archetype') or 'UNCLASSIFIED'
     route, w = _ROUTES.get(arch, _DEFAULT)
     ev = evidence(c, m)
     contrib = {k: round(w[k] * ev.get(k, 0.0), 3) for k in w}    # weighted contribution per dimension
-    score = sum(contrib.values())
-    ok = score >= config.ENTRY_ROUTE_MIN_SCORE
-    # gap decomposition (audit): how far each dimension is from its own max possible contribution —
-    # the components most responsible for the shortfall to ENTRY_ROUTE_MIN_SCORE, largest first.
+    raw = round(sum(contrib.values()), 3)
+    # gap decomposition (audit): the components most responsible for the shortfall to the threshold.
     gap = {k: round(w[k] * (1.0 - ev.get(k, 0.0)), 3) for k in w}
     top_drag = sorted(gap.items(), key=lambda kv: -kv[1])[:3]
-    return {'pass': ok, 'score': round(score, 3), 'route': route, 'archetype': arch,
-            'evidence': ev, 'weights': w, 'contributions': contrib, 'top_drag': top_drag,
-            'shortfall': round(max(0.0, config.ENTRY_ROUTE_MIN_SCORE - score), 3),
+    vetoes = hard_vetoes(c)
+    base = {'route': route, 'archetype': arch, 'evidence': ev, 'weights': w,
+            'contributions': contrib, 'top_drag': top_drag, 'raw_score': raw}
+    if vetoes:
+        return {**base, 'pass': False, 'score': None, 'score_status': 'HARD_VETO',
+                'hard_vetoes': vetoes, 'primary_veto': vetoes[0], 'shortfall': None,
+                'reason': _VETO_LABEL[vetoes[0]]}
+    ok = raw >= config.ENTRY_ROUTE_MIN_SCORE
+    return {**base, 'pass': ok, 'score': raw, 'score_status': 'SCORED', 'hard_vetoes': [],
+            'primary_veto': None, 'shortfall': round(max(0.0, config.ENTRY_ROUTE_MIN_SCORE - raw), 3),
             'reason': None if ok else 'MISSED_DUE_TO_LOW_ASYMMETRY'}
