@@ -103,7 +103,14 @@ def decide(c: dict, m: dict) -> dict:
     arch = (c.get('archetype') or {}).get('archetype') or 'UNCLASSIFIED'
     route, w = _ROUTES.get(arch, _DEFAULT)
     ev = evidence(c, m)
-    score = sum(w[k] * ev.get(k, 0.0) for k in w)
+    contrib = {k: round(w[k] * ev.get(k, 0.0), 3) for k in w}    # weighted contribution per dimension
+    score = sum(contrib.values())
     ok = score >= config.ENTRY_ROUTE_MIN_SCORE
+    # gap decomposition (audit): how far each dimension is from its own max possible contribution —
+    # the components most responsible for the shortfall to ENTRY_ROUTE_MIN_SCORE, largest first.
+    gap = {k: round(w[k] * (1.0 - ev.get(k, 0.0)), 3) for k in w}
+    top_drag = sorted(gap.items(), key=lambda kv: -kv[1])[:3]
     return {'pass': ok, 'score': round(score, 3), 'route': route, 'archetype': arch,
-            'evidence': ev, 'reason': None if ok else 'MISSED_DUE_TO_LOW_ASYMMETRY'}
+            'evidence': ev, 'weights': w, 'contributions': contrib, 'top_drag': top_drag,
+            'shortfall': round(max(0.0, config.ENTRY_ROUTE_MIN_SCORE - score), 3),
+            'reason': None if ok else 'MISSED_DUE_TO_LOW_ASYMMETRY'}

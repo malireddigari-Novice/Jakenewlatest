@@ -63,6 +63,13 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
         'cont_prob': c.get('cont_prob'), 'self_sust': c.get('self_sust'),
         # expression
         'candidate_expiry': candidate_expiry, 'candidate_strike': candidate_strike,
+        # route-score decomposition (audit): the 7-dimension asymmetry breakdown + what dragged it down
+        'route': (c.get('route_decision') or {}).get('route'),
+        'route_score': (c.get('route_decision') or {}).get('score'),
+        'route_evidence': (c.get('route_decision') or {}).get('evidence'),
+        'route_contributions': (c.get('route_decision') or {}).get('contributions'),
+        'route_top_drag': (c.get('route_decision') or {}).get('top_drag'),
+        'route_shortfall': (c.get('route_decision') or {}).get('shortfall'),
         # decision — the whole point
         'decision': decision, 'owner': owner,
         'veto_reasons': list(veto_reasons or []),        # ALL gate failures, not just the first

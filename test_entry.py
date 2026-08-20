@@ -71,5 +71,16 @@ ck("a weak candidate fails on low total asymmetry (soft, not veto)",
 ck("evidence dimensions are all in [0,1]",
    all(0.0 <= v <= 1.0 for v in entry.evidence(cand(), m()).values()))
 
+
+# audit: route decision must expose the score decomposition (v3 second-audit follow-up)
+_c = {'side':'PUT','archetype':{'archetype':'CROSS_EXPIRY_ACCUMULATION'},'notional':1,'dist_low':1.2,
+      'self_sust':0.55,'cont_prob':0.6,'resp_event':0.0,'surface':{},'acceptance':{}}
+_m = {'rank':3,'attention_share':0.16,'mass_z':2.5,'put_control':0.78}
+_d = entry.decide(_c, _m)
+ck("route decision exposes contributions", isinstance(_d.get('contributions'), dict) and len(_d['contributions'])==7)
+ck("route decision exposes top_drag (3 dims)", len(_d.get('top_drag') or [])==3)
+ck("contributions sum to the score", abs(sum(_d['contributions'].values()) - _d['score']) < 1e-6)
+ck("shortfall is threshold - score when failing", _d['shortfall'] >= 0)
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

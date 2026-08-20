@@ -1132,9 +1132,14 @@ class AttentionEngine:
         route_ok = False
         if config.ENTRY_ROUTES_ENABLED:
             dec = entry.decide(c, m)
+            c['route_decision'] = dec           # audit: carry the full decomposition into the ledger
             if not dec['pass']:
-                logger.info("ENTRY-REJECT %s %s route=%s asym=%.2f<%.2f (%s)", sym, side,
-                            dec.get('route'), dec['score'], config.ENTRY_ROUTE_MIN_SCORE, dec['reason'])
+                # audit decomposition: show the weighted contributions + the top dimensions dragging
+                # the score below threshold, so a near-miss is answerable without reverse-engineering.
+                drag = ' '.join(f"{k}-{v:.2f}" for k, v in (dec.get('top_drag') or []))
+                logger.info("ENTRY-REJECT %s %s route=%s asym=%.2f<%.2f (%s) | contrib=%s | top_drag=[%s]",
+                            sym, side, dec.get('route'), dec['score'], config.ENTRY_ROUTE_MIN_SCORE,
+                            dec['reason'], dec.get('contributions'), drag)
                 return dec['reason']
             route_ok = True
             logger.info("ENTRY-ROUTE %s %s %s asym=%.2f (archetype=%s) — soft gates bypassed",
