@@ -461,7 +461,9 @@ class AttentionEngine:
                                    decision=('ALLOW' if rej is None else 'REJECT'),
                                    owner=('_open_wave' if rej is None else f'_open_wave:{rej}'),
                                    veto_reasons=([] if rej is None else self._hard_vetoes(cc, metrics_by.get(en['ticker']), now) or [rej]),
-                                   strike=(cc or {}).get('best', {}).get('strike'))
+                                   strike=(cc or {}).get('best', {}).get('strike'),
+                                   expiry=(self._expiry.get(en['ticker']).isoformat()
+                                           if self._expiry.get(en['ticker']) else None))
                 if config.RESEARCH_ARCHIVE_ENABLED:
                     self.archive.write(replay.candidate_record(
                         now, en['ticker'], en['side'], metrics_by.get(en['ticker']),
