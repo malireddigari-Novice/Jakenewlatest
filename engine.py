@@ -106,9 +106,10 @@ class AttentionEngine:
         """Fresh EOD entry-funnel counters (audit item 3/6). Sets are keyed by wave_id so a candidate
         re-evaluated across many polls is counted once per stage."""
         from collections import defaultdict
-        return {'polls': 0, 'evaluated': set(), 'qualified': set(), 'entry_ready': set(),
+        return {'polls': 0, 'evaluated': set(), 'qualified': set(), 'route_passed': set(),
                 'entered': set(), 'near_miss_alerts': 0,
-                'hard_veto': defaultdict(set), 'near_miss': defaultdict(set)}
+                'hard_veto': defaultdict(set), 'near_miss': defaultdict(set),
+                'post_route_veto': defaultdict(set)}   # route passed but a later hard gate killed it
 
     def _provenance(self):
         """(code_version, config_hash) for the Decision Ledger — so a record is tied to exactly what
@@ -451,6 +452,11 @@ class AttentionEngine:
                         logger.info("EXPIRY-SELECT %s %s → %s%s", en['ticker'], en['side'], sel['reason'],
                                     '' if config.EXPIRY_SELECTOR_SHADOW else ' (LIVE reroute)')
                 rej = self._open_wave(en, cand, ranked, market_mass, now)   # None on entry; §19 label on reject
+                # funnel attribution: if the route PASSED but the entry was still rejected, a POST-ROUTE
+                # hard gate owns the kill — record which, so "ROUTE_PASSED but 0 ENTERED" is explained.
+                rd = ((cand.get(en['ticker']) or {}).get('route_decision') or {})
+                if rd.get('pass') and rej is not None:
+                    self._attr['post_route_veto'][rej].add(en.get('wave_id'))
                 if rej is None:
                     self._attr['entered'].add(en.get('wave_id'))
                     if config.DAILY_ENTRY_LOCK_ENABLED:
@@ -1213,7 +1219,9 @@ class AttentionEngine:
                 return dec['reason']
             route_ok = True
             self._attr['qualified'].add(wid)
-            self._attr['entry_ready'].add(wid)
+            self._attr['route_passed'].add(wid)     # ROUTE_PASSED — NOT yet entry-eligible (post-route
+            #                                          hard gates below can still veto: barshock, inventory
+            #                                          PASS, package, portfolio, execution, late-0DTE, hyp)
             logger.info("ENTRY-ROUTE %s %s %s asym=%.2f (archetype=%s) — soft gates bypassed",
                         sym, side, dec['route'], dec['score'], dec['archetype'])
             # P1 overnight hysteresis: a surviving opposite-side campaign raises the bar (Friday's
@@ -1725,15 +1733,19 @@ class AttentionEngine:
         a = self._attr
         hv = {k: len(v) for k, v in a['hard_veto'].items()}
         nm = {k: len(v) for k, v in a['near_miss'].items()}
-        logger.info("ATTRITION-REPORT polls=%d | ACTIVE_EVENT(evaluated)=%d → QUALIFIED_CAMPAIGN(no-veto)=%d "
-                    "→ ENTRY_READY=%d → ENTERED=%d | near-miss-alerts=%d",
-                    a['polls'], len(a['evaluated']), len(a['qualified']), len(a['entry_ready']),
-                    len(a['entered']), a['near_miss_alerts'])
-        logger.info("ATTRITION-REPORT hard-veto by reason: %s", hv or '{}')
+        prv = {k: len(v) for k, v in a['post_route_veto'].items()}
+        # Corrected funnel (audit): ROUTE_PASSED is NOT the same as entry-eligible — post-route hard
+        # gates can still veto. ENTERED is the only "order submitted" stage.
+        logger.info("ATTRITION-REPORT polls=%d | ACTIVE_EVENT=%d → QUALIFIED_CAMPAIGN(no route-veto)=%d "
+                    "→ ROUTE_PASSED(score≥%.2f)=%d → ENTERED=%d | near-miss-alerts=%d",
+                    a['polls'], len(a['evaluated']), len(a['qualified']), config.ENTRY_ROUTE_MIN_SCORE,
+                    len(a['route_passed']), len(a['entered']), a['near_miss_alerts'])
+        logger.info("ATTRITION-REPORT route hard-veto by reason: %s", hv or '{}')
+        logger.info("ATTRITION-REPORT POST-ROUTE veto (why ROUTE_PASSED did not ENTER): %s", prv or '{}')
         logger.info("ATTRITION-REPORT near-miss (0.45-0.55) by route: %s", nm or '{}')
         try:
             notify.send(f"📊 Jakenew EOD attrition — ACTIVE {len(a['evaluated'])} → qualified "
-                        f"{len(a['qualified'])} → entry-ready {len(a['entry_ready'])} → entered "
-                        f"{len(a['entered'])} | near-miss alerts {a['near_miss_alerts']} | vetoes {hv or '{}'}")
+                        f"{len(a['qualified'])} → route-passed {len(a['route_passed'])} → entered "
+                        f"{len(a['entered'])} | post-route veto {prv or '{}'} | route-veto {hv or '{}'}")
         except Exception:
             pass

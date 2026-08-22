@@ -760,6 +760,34 @@ change execution. That, plus the **forward-outcome replay** (score-bucket MFE/MA
 hard-veto false-positive study) is the evidence-based next phase — the near-miss stream + attrition
 report are the instruments that make it possible.
 
+### Missed-winner audit — TSLA 350C 08/21 + the "ENTRY_READY 7 → ENTERED 0" bug (2026-08-22)
+
+Two distinct causes found from the 08/21 logs + candidate archive (no hindsight — traced chronologically):
+
+**Cause 1 — the 7-ENTRY_READY-0-ENTERED contradiction: `HYPOTHESIS_AMBIGUITY_PASS`.** 8 of 9
+post-route abstains were hypotheses-ambiguous (65 across the day). The 8-way hypotheses distribution's
+top probability rarely clears `HYP_DOMINANT_MIN=0.35` (observed tops: 0.17–0.27, even when
+`FRESH_DIRECTIONAL` was correctly the top), so this **hard** PASS gate abstained on ~every route-passer.
+It was only ON because of the blanket "all flags on"; its design default is OFF ("observe first").
+**Fix: `HYP_PASS_ENABLED` reverted to OFF** — the hypotheses engine still computes+logs, it just no
+longer vetoes on ambiguity until `HYP_DOMINANT_MIN` is recalibrated for an 8-way split. (No threshold
+changed.) Also fixed the **funnel semantics**: `ROUTE_PASSED` (score ≥ 0.55) is now distinct from
+entry-eligible — the attrition report shows `ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ROUTE_PASSED →
+ENTERED` plus a **POST-ROUTE veto breakdown** so "route passed but didn't enter" is always attributed.
+
+**Cause 2 — TSLA was found early & cheap, then killed by `EXIT_SHAPE`.** At **08:32 the TSLA 347.5C was
+$3.10, z=8.0, route raw_score 0.71** (well above 0.55) — but `HARD_VETO=EXIT_SHAPE` every poll. The
+shape/acceptance classifier tagged the violent opening pullback ($3.10→$2.28 in the first minutes) as
+`EXHAUSTION_OR_EXIT_FLOW` / `HEAVY_VOLUME_NEGATIVE_RESPONSE` — i.e. it **misread a shakeout as
+rejection/exit** on a high-gamma opening move. Later polls added `OBJECTIVELY_LATE` (the confirmation-
+lag Catch-22). So a pristine early convexity event (identified at ~$2.3–3.1, ran to $13+) never reached
+the route funnel. **This is established, NOT yet fixed** (per the audit's "establish the cause first").
+The fix will be to distinguish a **shakeout** (early dip inside an intact accumulation, using the
+existing `shakeout`/MFE signals) from a true premium **rejection**, and to reconsider whether
+`EXIT_SHAPE` should be a *hard* veto in the opening window vs a discount. **TSLA 350C 08/21/2026 is
+added to the permanent regression set** (opening concentrated volume → premium acceptance → self-
+sustaining convexity, recognized while cheap).
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.
