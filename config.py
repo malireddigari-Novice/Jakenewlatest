@@ -941,7 +941,11 @@ INV_DEPLETE_CLOSED     = float(os.getenv('INV_DEPLETE_CLOSED', '0.85'))    # →
 # ═══════════════════════════════════════════════════════════════════════════════
 HYPOTHESES_ENABLED     = os.getenv('HYPOTHESES_ENABLED', 'true').lower() == 'true'
 HYP_PASS_ENABLED       = os.getenv('HYP_PASS_ENABLED', 'false').lower() == 'true'  # abstain when no hypothesis dominates (OFF: observe first)
-HYP_DOMINANT_MIN       = float(os.getenv('HYP_DOMINANT_MIN', '0.35'))  # top hypothesis prob below this = ambiguous (8-way split)
+HYP_DOMINANT_MIN       = float(os.getenv('HYP_DOMINANT_MIN', '0.35'))  # (legacy — superseded by HYP_ABSTAIN_MARGIN)
+# 2026-08-22: for an 8-way distribution the absolute top-prob bar was unreachable, so HYP_PASS abstained
+# on ~everything. The gate now abstains only when a NON-directional hypothesis (roll/spread/hedge/
+# closing) LEADS fresh-directional by this margin, or UNKNOWN dominates. FRESH_DIRECTIONAL leading = OK.
+HYP_ABSTAIN_MARGIN     = float(os.getenv('HYP_ABSTAIN_MARGIN', '0.05'))
 HYP_DIRECTIONAL_MIN    = float(os.getenv('HYP_DIRECTIONAL_MIN', '0.45'))# P(fresh directional) needed to treat as clean directional
 
 # ═══════════════════════════════════════════════════════════════════════════════

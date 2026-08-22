@@ -769,8 +769,14 @@ post-route abstains were hypotheses-ambiguous (65 across the day). The 8-way hyp
 top probability rarely clears `HYP_DOMINANT_MIN=0.35` (observed tops: 0.17–0.27, even when
 `FRESH_DIRECTIONAL` was correctly the top), so this **hard** PASS gate abstained on ~every route-passer.
 It was only ON because of the blanket "all flags on"; its design default is OFF ("observe first").
-**Fix: `HYP_PASS_ENABLED` reverted to OFF** — the hypotheses engine still computes+logs, it just no
-longer vetoes on ambiguity until `HYP_DOMINANT_MIN` is recalibrated for an 8-way split. (No threshold
+**Fix (2026-08-22, two stages):** first reverted `HYP_PASS_ENABLED` to OFF to unblock trading; then
+**re-enabled it with a recalibrated ambiguity rule.** The absolute top-prob bar (`HYP_DOMINANT_MIN
+0.35`) is unreachable in an 8-way distribution, so it abstained on ~everything. The gate now abstains
+only when a **NON-directional** hypothesis (roll / spread-leg / hedge / closing) *leads*
+fresh-directional by `HYP_ABSTAIN_MARGIN` (0.05), or when `UNKNOWN` dominates — a `FRESH_DIRECTIONAL`
+lead (even at a modest 8-way prob) is **not** ambiguous for a directional entry. Verified on the 08/21
+cases: the AMZN-PUT `FRESH_DIRECTIONAL` reads now enter; the AAPL/NVDA `SPREAD_LEG` reads still abstain
+(correctly). `abstain_cause` names the leading non-directional family in the ledger. (No threshold
 changed.) Also fixed the **funnel semantics**: `ROUTE_PASSED` (score ≥ 0.55) is now distinct from
 entry-eligible — the attrition report shows `ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ROUTE_PASSED →
 ENTERED` plus a **POST-ROUTE veto breakdown** so "route passed but didn't enter" is always attributed.

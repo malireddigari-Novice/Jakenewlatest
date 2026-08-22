@@ -40,5 +40,19 @@ print("── probabilities normalise ──")
 r = hp.assess({})
 ck("distribution sums ~1", abs(sum(r['probs'].values()) - 1.0) < 1e-6)
 
+print("── recalibrated ambiguity (2026-08-22): abstain only on NON-directional lead ──")
+# FRESH_DIRECTIONAL leading (even at a modest 8-way prob) is NOT ambiguous — the 08/21 regression
+r = hp.assess({'acceptance': 'ABSORPTION', 'resp_event': 0.05, 'self_sust': 0.3})
+ck("modest FRESH_DIRECTIONAL lead → NOT ambiguous (enters)", r['top'] == 'FRESH_DIRECTIONAL' and not r['ambiguous'])
+# a spread/roll clearly leading fresh-directional IS ambiguous (abstain — non-directional intent)
+ck("SPREAD_LEG lead → ambiguous (abstain)", hp.assess({'package': 'VERTICAL_LIKELY'})['ambiguous'])
+ck("ROLL lead → ambiguous (abstain)", hp.assess({'package': 'ROLL_LIKELY'})['ambiguous'])
+ck("HEDGE lead → ambiguous (abstain)", hp.assess({'hedge': 'CONVEXITY', 'package': 'STRADDLE_COMBO_LIKELY'})['ambiguous'])
+# abstain_cause names the leading non-directional family
+ck("abstain_cause reports the non-directional leader", hp.assess({'package': 'ROLL_LIKELY'})['abstain_cause'] == 'ROLL')
+
+print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
+sys.exit(1 if fails else 0)
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

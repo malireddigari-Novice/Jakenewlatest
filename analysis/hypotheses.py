@@ -97,7 +97,18 @@ def assess(evidence: dict) -> dict:
     # UNKNOWN absorbs residual uncertainty: if nothing separated, it stays ~flat and can top out.
     top = max(probs, key=probs.get)
     top_p = probs[top]
-    return {'probs': probs, 'top': top, 'top_p': top_p,
-            'directional_p': probs['FRESH_DIRECTIONAL'],
-            'ambiguous': top_p < config.HYP_DOMINANT_MIN or top == 'UNKNOWN',
-            'reason': f'{top} p={top_p:.2f} (directional={probs["FRESH_DIRECTIONAL"]:.2f})'}
+    dir_p = probs['FRESH_DIRECTIONAL']
+    # 2026-08-22 recalibration for the 8-way split: an absolute top-prob bar (0.35) is unreachable in
+    # an 8-way distribution, so it abstained on ~everything. For a DIRECTIONAL entry the gate should
+    # abstain only when the intent reads NON-directional — a roll / spread-leg / hedge / closing
+    # hypothesis clearly LEADS fresh-directional (by HYP_ABSTAIN_MARGIN) — or when UNKNOWN dominates.
+    # When FRESH_DIRECTIONAL is the leading interpretation (even at a modest 8-way prob), it is NOT
+    # ambiguous for the purpose of a directional trade. Every non-directional family is a reason to pass.
+    non_directional_lead = (top != 'FRESH_DIRECTIONAL' and top != 'UNKNOWN'
+                            and (top_p - dir_p) >= config.HYP_ABSTAIN_MARGIN)
+    ambiguous = (top == 'UNKNOWN') or non_directional_lead
+    return {'probs': probs, 'top': top, 'top_p': top_p, 'directional_p': dir_p,
+            'ambiguous': ambiguous, 'abstain_cause': ('UNKNOWN' if top == 'UNKNOWN'
+                          else top if non_directional_lead else None),
+            'reason': f'{top} p={top_p:.2f} (directional={dir_p:.2f})'
+                      + (f' — non-directional lead {top}' if non_directional_lead else '')}
