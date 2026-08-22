@@ -490,6 +490,13 @@ RESP_WINDOW_S = float(os.getenv('RESP_WINDOW_S', '300'))    # trailing premium s
 ALLOW_DELAYED_CONVEXITY = os.getenv('ALLOW_DELAYED_CONVEXITY', 'true').lower() == 'true'
 RESP_MFE_MIN        = float(os.getenv('RESP_MFE_MIN', '0.05'))       # premium expanded ≥5% at some point
 SHAKEOUT_MIN        = float(os.getenv('SHAKEOUT_MIN', '0.25'))       # dip-then-recover score to allow it
+# 2026-08-22 — distinguish a SHAKEOUT (early dip inside an intact accumulation that recovers) from a
+# true REJECTION (premium only ever fails) so a high-gamma opening pullback (TSLA 350C 08/21: $3.10→
+# $2.28 then recovered) is NOT hard-vetoed as EXIT_SHAPE. Exemption is narrow: only the ambiguous dip
+# shapes, and only with a real dip-then-recover signature + campaign vitality (prior MFE / self-sust).
+EXIT_SHAPE_SHAKEOUT_EXEMPT = os.getenv('EXIT_SHAPE_SHAKEOUT_EXEMPT', 'true').lower() == 'true'
+EXIT_SHAKEOUT_MIN     = float(os.getenv('EXIT_SHAKEOUT_MIN', '0.25'))   # dip-then-recover score for the exemption
+EXIT_SHAKEOUT_MIN_MFE = float(os.getenv('EXIT_SHAKEOUT_MIN_MFE', '0.05'))  # min prior favorable excursion
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 

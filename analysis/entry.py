@@ -47,6 +47,28 @@ def _clamp(x):
 _EXIT_SHAPES = {'MATURE_SCALING_ACTIVITY', 'DISTRIBUTION_AT_PREMIUM_HIGH',
                 'EXHAUSTION_OR_EXIT_FLOW', 'STALE_OPENING_VOLUME',
                 'HEAVY_VOLUME_NEGATIVE_RESPONSE', 'ISOLATED_PRINT'}
+# Only these two exit-shapes are AMBIGUOUS between a shakeout and a true exit — a high-gamma dip can
+# print heavy volume + a negative response and still be a retracement inside an intact accumulation.
+# The others (premium-at-high distribution, stale opening, mature scaling, lone late print) are NOT
+# shakeout-eligible: a dip-then-recover signature does not redeem them, so they always hard-veto.
+_SHAKEOUT_ELIGIBLE = {'EXHAUSTION_OR_EXIT_FLOW', 'HEAVY_VOLUME_NEGATIVE_RESPONSE'}
+
+
+def _is_shakeout_not_rejection(c: dict) -> bool:
+    """Distinguish a SHAKEOUT (early dip that RECOVERS inside an intact accumulation — TSLA 350C 08/21)
+    from a true REJECTION (premium only ever fails). A shakeout shows a real dip-then-recover score AND
+    campaign vitality (a prior favorable excursion or still self-sustaining), or the archetype engine
+    already classified it SHAKEOUT_AND_RECOVERY. Premium that is merely being destroyed (no recovery,
+    no prior excursion — the GOOGL 362.5C case) does NOT qualify and stays vetoed."""
+    if not config.EXIT_SHAPE_SHAKEOUT_EXEMPT:
+        return False
+    if (c.get('archetype') or {}).get('archetype') == 'SHAKEOUT_AND_RECOVERY':
+        return True
+    shakeout = c.get('shakeout', 0.0) or 0.0
+    mfe = c.get('mfe', 0.0) or 0.0
+    self_sust = c.get('self_sust', 0.0) or 0.0
+    return (shakeout >= config.EXIT_SHAKEOUT_MIN
+            and (mfe > config.EXIT_SHAKEOUT_MIN_MFE or self_sust >= config.SELF_SUST_WEAK))
 
 
 def hard_vetoes(c: dict) -> list:
@@ -54,14 +76,20 @@ def hard_vetoes(c: dict) -> list:
     veto family, so the ledger can attribute the kill precisely (audit item 1/8). (Microstructure
     vetoes — stale/spread/liquidity/execution — stay in the engine.)"""
     v = []
+    shakeout = _is_shakeout_not_rejection(c)                  # a recovering dip, not an exit
     if (c.get('dist_prob', 0.0) or 0.0) >= config.ENTRY_HARD_DIST:
         v.append('DISTRIBUTION')                              # coherent distribution
     if (c.get('archetype') or {}).get('archetype') == 'DISTRIBUTION':
         v.append('DISTRIBUTION_ARCHETYPE')                    # never route-enter a distribution campaign
-    if c.get('shape') in _EXIT_SHAPES:
-        v.append('EXIT_SHAPE')                                # mature / exit / stale event shape
+    shape = c.get('shape')
+    if shape in _EXIT_SHAPES:
+        # 2026-08-22: a shakeout-eligible dip that shows a recover signature is NOT an exit shape.
+        if not (shape in _SHAKEOUT_ELIGIBLE and shakeout):
+            v.append('EXIT_SHAPE')                            # mature / exit / stale event shape
     if config.ACCEPTANCE_ENABLED and (c.get('acceptance') or {}).get('label') == 'REJECTION':
-        v.append('PREMIUM_REJECTION')                         # heavy volume but premium making lower lows
+        # a genuine shakeout's transient lower-low is not a premium REJECTION of the thesis.
+        if not shakeout:
+            v.append('PREMIUM_REJECTION')                     # heavy volume but premium making lower lows
     if (c.get('dist_low', 1.0) or 1.0) > config.ENTRY_HARD_EXTENSION:
         v.append('OBJECTIVELY_LATE')                          # objectively-late extension
     return v

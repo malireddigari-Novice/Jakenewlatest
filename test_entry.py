@@ -100,5 +100,29 @@ _sd = entry.decide({'side':'PUT','archetype':{'archetype':'CROSS_EXPIRY_ACCUMULA
                    {'rank':3,'attention_share':0.16,'mass_z':2.5,'put_control':0.78})
 ck("no-veto -> score_status SCORED with a numeric score", _sd['score_status']=='SCORED' and isinstance(_sd['score'],float))
 
+
+# 2026-08-22: EXIT_SHAPE must distinguish SHAKEOUT from REJECTION (TSLA 350C 08/21 regression)
+# a shakeout-eligible dip WITH a recover signature is NOT hard-vetoed as EXIT_SHAPE...
+_shakeout = {'shape':'EXHAUSTION_OR_EXIT_FLOW','shakeout':0.4,'mfe':0.15,'self_sust':0.2,
+             'archetype':{'archetype':'SHAKEOUT_AND_RECOVERY'},'acceptance':{'label':'NEUTRAL'},
+             'dist_prob':0.1,'dist_low':1.2}
+ck("shakeout (recovering dip) is NOT EXIT_SHAPE vetoed", 'EXIT_SHAPE' not in entry.hard_vetoes(_shakeout))
+# ...but a TRUE rejection (only ever fails: low shakeout, no MFE, not self-sustaining) STILL vetoes
+_reject = {'shape':'HEAVY_VOLUME_NEGATIVE_RESPONSE','shakeout':0.05,'mfe':-0.2,'self_sust':0.0,
+           'archetype':{'archetype':'DISTRIBUTION'},'acceptance':{'label':'REJECTION'},
+           'dist_prob':0.1,'dist_low':1.2}
+ck("true rejection STILL hard-vetoed as EXIT_SHAPE", 'EXIT_SHAPE' in entry.hard_vetoes(_reject))
+ck("true rejection also keeps PREMIUM_REJECTION", 'PREMIUM_REJECTION' in entry.hard_vetoes(_reject))
+# a premium-at-high DISTRIBUTION shape is NOT shakeout-eligible -> always vetoed even with recover signals
+_disth = {'shape':'DISTRIBUTION_AT_PREMIUM_HIGH','shakeout':0.5,'mfe':0.3,'self_sust':0.4,
+          'archetype':{'archetype':'SHAKEOUT_AND_RECOVERY'},'acceptance':{'label':'NEUTRAL'},
+          'dist_prob':0.1,'dist_low':1.2}
+ck("distribution-at-high stays EXIT_SHAPE vetoed (not shakeout-eligible)", 'EXIT_SHAPE' in entry.hard_vetoes(_disth))
+# shakeout candidate whose only issue was acceptance=REJECTION is not PREMIUM_REJECTION vetoed
+_shk_rej = {'shape':'EXHAUSTION_OR_EXIT_FLOW','shakeout':0.4,'mfe':0.15,'self_sust':0.2,
+            'archetype':{'archetype':'SHAKEOUT_AND_RECOVERY'},'acceptance':{'label':'REJECTION'},
+            'dist_prob':0.1,'dist_low':1.2}
+ck("shakeout suppresses PREMIUM_REJECTION too", 'PREMIUM_REJECTION' not in entry.hard_vetoes(_shk_rej))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

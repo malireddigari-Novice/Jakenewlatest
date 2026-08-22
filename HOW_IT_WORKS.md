@@ -781,12 +781,22 @@ shape/acceptance classifier tagged the violent opening pullback ($3.10→$2.28 i
 `EXHAUSTION_OR_EXIT_FLOW` / `HEAVY_VOLUME_NEGATIVE_RESPONSE` — i.e. it **misread a shakeout as
 rejection/exit** on a high-gamma opening move. Later polls added `OBJECTIVELY_LATE` (the confirmation-
 lag Catch-22). So a pristine early convexity event (identified at ~$2.3–3.1, ran to $13+) never reached
-the route funnel. **This is established, NOT yet fixed** (per the audit's "establish the cause first").
-The fix will be to distinguish a **shakeout** (early dip inside an intact accumulation, using the
-existing `shakeout`/MFE signals) from a true premium **rejection**, and to reconsider whether
-`EXIT_SHAPE` should be a *hard* veto in the opening window vs a discount. **TSLA 350C 08/21/2026 is
-added to the permanent regression set** (opening concentrated volume → premium acceptance → self-
-sustaining convexity, recognized while cheap).
+the route funnel.
+
+**FIXED (2026-08-22): EXIT_SHAPE now distinguishes shakeout from rejection** (`entry._is_shakeout_not_
+rejection`, `EXIT_SHAPE_SHAKEOUT_EXEMPT`). Only the two *ambiguous* dip shapes (`EXHAUSTION_OR_EXIT_
+FLOW`, `HEAVY_VOLUME_NEGATIVE_RESPONSE`) can be exempted, and only with a real dip-then-recover
+signature (`shakeout ≥ EXIT_SHAKEOUT_MIN`) **plus** campaign vitality (prior favorable excursion
+`mfe > EXIT_SHAKEOUT_MIN_MFE` or still self-sustaining), or when the archetype engine already called it
+`SHAKEOUT_AND_RECOVERY`. Premium that is merely being destroyed (no recovery, no prior excursion — the
+GOOGL 362.5C case the veto was built for) still hard-vetoes, and genuine distribution shapes
+(`DISTRIBUTION_AT_PREMIUM_HIGH`, stale/mature/lone-print) are **not** shakeout-eligible and always
+veto. The same discriminator also suppresses a `PREMIUM_REJECTION` veto for a genuine shakeout (a
+transient lower-low is not a thesis rejection). Tests in `test_entry.py`. **TSLA 350C 08/21/2026 is in
+the permanent regression set** (opening concentrated volume → premium acceptance → self-sustaining
+convexity, recognized while cheap). Note: `OBJECTIVELY_LATE` on the *later* polls is a separate
+remaining issue — the late veto should key off first-identifiable-while-cheap, not current price; that
+is the next item.
 
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
