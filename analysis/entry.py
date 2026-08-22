@@ -83,9 +83,14 @@ def hard_vetoes(c: dict) -> list:
         v.append('DISTRIBUTION_ARCHETYPE')                    # never route-enter a distribution campaign
     shape = c.get('shape')
     if shape in _EXIT_SHAPES:
-        # 2026-08-22: a shakeout-eligible dip that shows a recover signature is NOT an exit shape.
-        if not (shape in _SHAKEOUT_ELIGIBLE and shakeout):
-            v.append('EXIT_SHAPE')                            # mature / exit / stale event shape
+        eligible_shakeout = shape in _SHAKEOUT_ELIGIBLE and shakeout   # a recovering dip, not an exit
+        # 2026-08-22 rolling-shape: a lone exit-shape poll inside an otherwise-accumulating recent
+        # window is classifier noise (high-gamma opening flips shapes), not a real exit — suppress it.
+        n = c.get('shape_hist_n', 0) or 0
+        transient = (config.ROLLING_SHAPE_ENABLED and n >= config.EXIT_SHAPE_MIN_HIST
+                     and (c.get('recent_exit_frac', 1.0) or 0.0) < config.EXIT_PERSIST_FRAC)
+        if not (eligible_shakeout or transient):
+            v.append('EXIT_SHAPE')                            # persistent mature / exit / stale shape
     if config.ACCEPTANCE_ENABLED and (c.get('acceptance') or {}).get('label') == 'REJECTION':
         # a genuine shakeout's transient lower-low is not a premium REJECTION of the thesis.
         if not shakeout:

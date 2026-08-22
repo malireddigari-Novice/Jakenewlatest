@@ -126,5 +126,26 @@ suppressed = _cfg.DAILY_ENTRY_LOCK_ENABLED and slot in entered_today
 ck("used CALL/PUT slot is suppressed even with a fresh shock (daily lock owns)", suppressed)
 ck("an UNUSED opposite slot is not suppressed", not ('NVDA|CALL' in entered_today))
 
+# ── TSLA 350C 08/21 — opening convexity killed by EXIT_SHAPE + OBJECTIVELY_LATE (2026-08-22 fixes) ──
+print("── TSLA 350C 08/21: opening shakeout/late must not hard-veto the cheap convexity window ──")
+from analysis import entry as _entry
+# (a) a shakeout dip (EXHAUSTION + recover signature) is NOT an exit shape
+_tsla_shakeout = {'shape': 'EXHAUSTION_OR_EXIT_FLOW', 'shakeout': 0.4, 'mfe': 0.15, 'self_sust': 0.2,
+                  'archetype': {'archetype': 'SHAKEOUT_AND_RECOVERY'}, 'acceptance': {'label': 'NEUTRAL'},
+                  'dist_prob': 0.1, 'dist_low': 1.3, 'rel_premium': 1.0, 'value': {}}
+ck("TSLA opening shakeout not EXIT_SHAPE vetoed", 'EXIT_SHAPE' not in _entry.hard_vetoes(_tsla_shakeout))
+# (b) a lone exit-shape poll amid an accumulating opening window (rolling-shape) is not vetoed
+_tsla_transient = {'shape': 'MATURE_SCALING_ACTIVITY', 'shakeout': 0.0, 'mfe': 0.0, 'self_sust': 0.0,
+                   'archetype': {'archetype': 'PERSISTENT_ACCUMULATION'}, 'acceptance': {'label': 'NEUTRAL'},
+                   'dist_prob': 0.1, 'dist_low': 1.3, 'rel_premium': 1.0, 'value': {},
+                   'shape_hist_n': 8, 'recent_exit_frac': 0.12}
+ck("TSLA transient exit-shape amid accumulation not vetoed", 'EXIT_SHAPE' not in _entry.hard_vetoes(_tsla_transient))
+# (c) identified cheap (~$3, small drift) then extended is NOT OBJECTIVELY_LATE
+_tsla_cheap_id = dict(_tsla_transient, dist_low=1.9, rel_premium=1.6)   # ran ~1.6x since we saw it at $3
+ck("TSLA extended-but-identified-cheap not OBJECTIVELY_LATE", 'OBJECTIVELY_LATE' not in _entry.hard_vetoes(_tsla_cheap_id))
+# (d) but a real 3x+ chase since identification IS late (guard preserved)
+ck("TSLA true 3x chase still OBJECTIVELY_LATE",
+   'OBJECTIVELY_LATE' in _entry.hard_vetoes(dict(_tsla_transient, dist_low=6.0, rel_premium=3.3)))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

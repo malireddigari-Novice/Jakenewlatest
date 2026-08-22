@@ -811,6 +811,17 @@ no capture reference and value isn't cheap does it fall back to the raw session-
 while a genuine 3×+ post-identification run still vetoes. Flag `LATE_BY_DRIFT_ENABLED` (default on);
 tests in `test_entry.py`.
 
+**FIXED (2026-08-22): shape-classifier noise + entry re-arm (the TSLA residual).** A replay showed
+TSLA still wouldn't enter because its high-gamma opening flips the SHAPE poll-to-poll (`PERSISTENT_
+COMPACT_WAVE ↔ EXHAUSTION/MATURE/ISOLATED`), so the ACTIVE/entry polls landed on exit-shape reads, and
+by the time the shape settled clean the wave had cooled out of ACTIVE. Two fixes: **(1) rolling-shape**
+(`ROLLING_SHAPE_ENABLED`) — `EXIT_SHAPE` hard-vetoes only when the exit shape is *persistent* across
+the recent window (`recent_exit_frac ≥ EXIT_PERSIST_FRAC`), not on a single-poll flip inside an
+accumulating window (too little history → veto stands); **(2) entry re-arm**
+(`ENTRY_REARM_ENABLED`, `waves._can_enter_state`) — a wave that cooled ACTIVE→STABILIZING without ever
+entering keeps its one entry chance (all §16/route gates still apply, so it widens *when* we may try,
+not *what* qualifies). Regression `test_regression.py` replays the TSLA 350C 08/21 sequence.
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

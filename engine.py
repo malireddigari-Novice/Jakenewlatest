@@ -92,6 +92,7 @@ class AttentionEngine:
         self._code_version, self._config_hash = self._provenance()   # item 17: ledger stamps
         self._nm_ts: dict = {}             # near-miss alert throttle: (sym,side) -> last alert ts
         self._attr = self._new_attrition() # EOD entry-funnel attrition counters
+        self._shape_hist: dict = {}        # rolling-shape: (sym,side) -> [recent price-response shapes]
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
 
@@ -195,6 +196,7 @@ class AttentionEngine:
             self.state['day'] = today.isoformat()
             self._attr = self._new_attrition()     # reset the EOD attrition funnel each session
             self._nm_ts.clear()
+            self._shape_hist.clear()               # rolling-shape history is intraday
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
     def _reconcile_positions(self) -> None:
@@ -668,6 +670,15 @@ class AttentionEngine:
                     }
                     # Phase 2: EarlyAccumulationScore (research; logged, never gates alone).
                     cand[sym]['eas'] = campaign.early_accumulation_score(metrics[sym], cand[sym])
+                    # 2026-08-22 rolling-shape: track the recent price-response shapes per (sym,side) so
+                    # the EXIT_SHAPE veto can tell a persistent exit from a single-poll classifier flip.
+                    if config.ROLLING_SHAPE_ENABLED:
+                        hk = (sym, dom)
+                        h = (self._shape_hist.get(hk, []) + [cand[sym]['shape']])[-config.SHAPE_HIST_MAX:]
+                        self._shape_hist[hk] = h
+                        exitc = sum(1 for s in h if s in entry._EXIT_SHAPES)
+                        cand[sym]['shape_hist_n'] = len(h)
+                        cand[sym]['recent_exit_frac'] = round(exitc / len(h), 3) if h else 1.0
                     # Addendum #1-4,7: inventory memory (cost-basis drift + MarginalFlowEfficiency;
                     # HIGH ambiguity → abstain at entry) and the package/leg resolver (spread/roll
                     # legs). Wrapped: a data-shape surprise here must never break the whole poll.

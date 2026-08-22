@@ -305,5 +305,20 @@ on = wr2.evaluate([strong2()], {'MSFT': strong2()}, set(), 16000.0)
 ck("rank-2 strong campaign IS proposed with routes ON (MSFT 495C fix)", len(on['enter']) == 1)
 config.ENTRY_ROUTES_ENABLED = False
 
+
+# 2026-08-22: entry re-arm — a STABILIZING wave (not yet entered) keeps its one entry chance (TSLA 350C)
+class _W:
+    def __init__(self, state, issued): self.state=state; self.entry_issued=issued
+_we = WaveEngine()
+config.ENTRY_REARM_ENABLED = True
+ck("FORMING is entry-eligible", _we._can_enter_state(_W('FORMING', False)))
+ck("ACTIVE is entry-eligible", _we._can_enter_state(_W('ACTIVE', False)))
+ck("STABILIZING is entry-eligible when re-arm ON (TSLA fix)", _we._can_enter_state(_W('STABILIZING', False)))
+ck("already-entered wave is NOT eligible", not _we._can_enter_state(_W('ACTIVE', True)))
+ck("MATURE/DECAYING is NOT eligible", not _we._can_enter_state(_W('MATURE', False)))
+config.ENTRY_REARM_ENABLED = False
+ck("STABILIZING NOT eligible when re-arm OFF (legacy)", not _we._can_enter_state(_W('STABILIZING', False)))
+config.ENTRY_REARM_ENABLED = True
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

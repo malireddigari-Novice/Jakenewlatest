@@ -146,5 +146,18 @@ ck("no ref + extended + no value -> late", 'OBJECTIVELY_LATE' in entry.hard_veto
 # not expensive at all -> never late
 ck("cheap and un-extended -> not late", 'OBJECTIVELY_LATE' not in entry.hard_vetoes(_lc(dist_low=1.1, rel_premium=1.0)))
 
+
+# 2026-08-22: rolling-shape — a TRANSIENT exit-shape inside an accumulating window is classifier noise
+def _rs(shape, frac, n=6):
+    return {'shape':shape,'shakeout':0.0,'mfe':0.0,'self_sust':0.0,'archetype':{'archetype':'PERSISTENT_ACCUMULATION'},
+            'acceptance':{'label':'NEUTRAL'},'dist_prob':0.1,'dist_low':1.2,'rel_premium':1.0,'value':{},
+            'shape_hist_n':n,'recent_exit_frac':frac}
+ck("transient exit-shape (mostly accumulation recent) -> NOT EXIT_SHAPE vetoed",
+   'EXIT_SHAPE' not in entry.hard_vetoes(_rs('MATURE_SCALING_ACTIVITY', 0.17)))
+ck("persistent exit-shape (mostly exit recent) -> STILL EXIT_SHAPE vetoed",
+   'EXIT_SHAPE' in entry.hard_vetoes(_rs('MATURE_SCALING_ACTIVITY', 0.83)))
+ck("too little history -> veto stands (no false rescue)",
+   'EXIT_SHAPE' in entry.hard_vetoes(_rs('MATURE_SCALING_ACTIVITY', 0.0, n=2)))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

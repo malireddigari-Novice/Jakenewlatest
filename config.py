@@ -506,6 +506,20 @@ EXIT_SHAKEOUT_MIN_MFE = float(os.getenv('EXIT_SHAKEOUT_MIN_MFE', '0.05'))  # min
 # there is no capture reference AND robust value is not cheap.
 LATE_BY_DRIFT_ENABLED = os.getenv('LATE_BY_DRIFT_ENABLED', 'true').lower() == 'true'
 LATE_MAX_DRIFT        = float(os.getenv('LATE_MAX_DRIFT', '2.0'))       # premium ran > this x since first ID = chase
+
+# 2026-08-22 — rolling-shape read: a high-gamma opening (TSLA) flips the price-response SHAPE poll-to-
+# poll (PERSISTENT_COMPACT_WAVE ↔ EXHAUSTION/MATURE/ISOLATED). A lone exit-shape poll inside an
+# otherwise-accumulating recent window is classifier NOISE, not a real exit — so EXIT_SHAPE only
+# hard-vetoes when the exit shape is PERSISTENT across the window, not on a single-poll flip.
+ROLLING_SHAPE_ENABLED = os.getenv('ROLLING_SHAPE_ENABLED', 'true').lower() == 'true'
+SHAPE_HIST_MAX        = int(os.getenv('SHAPE_HIST_MAX', '10'))         # recent shape polls kept per (sym,side)
+EXIT_SHAPE_MIN_HIST   = int(os.getenv('EXIT_SHAPE_MIN_HIST', '4'))     # min recent polls before judging persistence
+EXIT_PERSIST_FRAC     = float(os.getenv('EXIT_PERSIST_FRAC', '0.5'))   # ≥ this frac exit-shaped = persistent (veto)
+
+# 2026-08-22 — entry re-arm: a wave that cooled ACTIVE→STABILIZING (intact but resting) without ever
+# entering can still take its one entry on a later clean poll while cheap — the entry chance is not
+# lost just because the opening auction noise pushed it out of ACTIVE for a few polls (TSLA 350C).
+ENTRY_REARM_ENABLED   = os.getenv('ENTRY_REARM_ENABLED', 'true').lower() == 'true'
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 

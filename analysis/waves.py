@@ -110,6 +110,17 @@ class WaveEngine:
                      or (m['mass_z'] >= config.WAVE_LEAD_Z_MID and m['impulse'] >= config.WAVE_LEAD_IMPULSE
                          and m['velocity'] > 0 and m['acceleration'] > 0)))
 
+    def _can_enter_state(self, w) -> bool:
+        """Entry-eligible wave states. A wave enters EARLY (FORMING) or when ACTIVE; the 2026-08-22
+        re-arm also lets a wave that cooled to STABILIZING (intact but resting) take its one entry —
+        opening-auction noise pushing it out of ACTIVE must not forfeit the trade (TSLA 350C). All the
+        §16/route entry gates still apply downstream, so this widens WHEN we may try, not WHAT qualifies."""
+        if not w or w.entry_issued:
+            return False
+        states = (('FORMING', 'ACTIVE', 'STABILIZING') if config.ENTRY_REARM_ENABLED
+                  else ('FORMING', 'ACTIVE'))
+        return w.state in states
+
     def _in_refractory(self, key, m, ts):
         r = self.refractory.get(key)
         if not r:
@@ -299,7 +310,9 @@ class WaveEngine:
                 # Enter EARLY — a FORMING wave qualifies (volume-leading-price, §2), not only a
                 # fully-ACTIVE one at z=8. The value gate (engine: mark <= 1.5x session low) is what
                 # keeps this from buying after the pop; here we just allow the earlier state.
-                if not w or w.state not in ('FORMING', 'ACTIVE') or w.entry_issued:
+                # 2026-08-22 re-arm: a wave that cooled ACTIVE→STABILIZING (intact but resting) without
+                # ever entering keeps its one entry chance (see _can_enter_state).
+                if not self._can_enter_state(w):
                     continue
                 if (t, side) in held:
                     continue
