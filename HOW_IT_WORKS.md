@@ -794,9 +794,16 @@ GOOGL 362.5C case the veto was built for) still hard-vetoes, and genuine distrib
 veto. The same discriminator also suppresses a `PREMIUM_REJECTION` veto for a genuine shakeout (a
 transient lower-low is not a thesis rejection). Tests in `test_entry.py`. **TSLA 350C 08/21/2026 is in
 the permanent regression set** (opening concentrated volume → premium acceptance → self-sustaining
-convexity, recognized while cheap). Note: `OBJECTIVELY_LATE` on the *later* polls is a separate
-remaining issue — the late veto should key off first-identifiable-while-cheap, not current price; that
-is the next item.
+convexity, recognized while cheap). **FIXED (2026-08-22): OBJECTIVELY_LATE now means "we identified it late", not "the price is high
+now."** The veto keys off **premium drift since first identification** (`rel_premium` = current mark ÷
+premium at first capture): a small drift (≤ `LATE_MAX_DRIFT`, default 2×) means we found it while cheap
+and any later extension is our own confirmation latency — not a chase — so it is **not** late. Robust
+`ValueState` is authoritative when known: `MATURE` (top of the contract's own history) → late even if
+it hasn't moved since; `CHEAP/FAIR` → never late (rescues a corruptible session-low). Only when there's
+no capture reference and value isn't cheap does it fall back to the raw session-low extension
+(`ENTRY_HARD_EXTENSION`). So the TSLA window (identified ~$3, drift ≤2× up to ~$6) is now tradeable,
+while a genuine 3×+ post-identification run still vetoes. Flag `LATE_BY_DRIFT_ENABLED` (default on);
+tests in `test_entry.py`.
 
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 

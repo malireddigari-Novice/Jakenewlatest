@@ -497,6 +497,15 @@ SHAKEOUT_MIN        = float(os.getenv('SHAKEOUT_MIN', '0.25'))       # dip-then-
 EXIT_SHAPE_SHAKEOUT_EXEMPT = os.getenv('EXIT_SHAPE_SHAKEOUT_EXEMPT', 'true').lower() == 'true'
 EXIT_SHAKEOUT_MIN     = float(os.getenv('EXIT_SHAKEOUT_MIN', '0.25'))   # dip-then-recover score for the exemption
 EXIT_SHAKEOUT_MIN_MFE = float(os.getenv('EXIT_SHAKEOUT_MIN_MFE', '0.05'))  # min prior favorable excursion
+
+# 2026-08-22 — OBJECTIVELY_LATE should mean "we identified it LATE", not "the price is high now"
+# (TSLA 350C 08/21 confirmation-lag Catch-22). Key off premium DRIFT since first identification
+# (rel_premium = current mark / premium when the event was first captured): a small drift means we
+# found it while cheap and any later extension is our own latency, not a chase. Robust ValueState
+# (CHEAP/FAIR rescues; EXTENDED/MATURE confirms late). Falls back to session-low extension only when
+# there is no capture reference AND robust value is not cheap.
+LATE_BY_DRIFT_ENABLED = os.getenv('LATE_BY_DRIFT_ENABLED', 'true').lower() == 'true'
+LATE_MAX_DRIFT        = float(os.getenv('LATE_MAX_DRIFT', '2.0'))       # premium ran > this x since first ID = chase
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 

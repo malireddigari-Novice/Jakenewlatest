@@ -124,5 +124,27 @@ _shk_rej = {'shape':'EXHAUSTION_OR_EXIT_FLOW','shakeout':0.4,'mfe':0.15,'self_su
             'dist_prob':0.1,'dist_low':1.2}
 ck("shakeout suppresses PREMIUM_REJECTION too", 'PREMIUM_REJECTION' not in entry.hard_vetoes(_shk_rej))
 
+
+# 2026-08-22: OBJECTIVELY_LATE = "we found it late", not "it moved fast" (TSLA 350C 08/21 regression)
+def _lc(**kw):
+    base = {'shape':'PERSISTENT_COMPACT_WAVE','shakeout':0.0,'mfe':0.0,'self_sust':0.0,
+            'archetype':{'archetype':'PERSISTENT_ACCUMULATION'},'acceptance':{'label':'NEUTRAL'},
+            'dist_prob':0.1,'dist_low':1.2,'rel_premium':1.0,'value':{}}
+    base.update(kw); return base
+# identified CHEAP (small drift) but session-extended -> NOT late (our latency, not a chase)
+ck("session-extended but small drift since ID -> NOT late",
+   'OBJECTIVELY_LATE' not in entry.hard_vetoes(_lc(dist_low=6.0, rel_premium=1.6)))
+# CHASED: ran far since we first saw it -> late
+ck("ran >2x since first ID -> OBJECTIVELY_LATE",
+   'OBJECTIVELY_LATE' in entry.hard_vetoes(_lc(dist_low=6.0, rel_premium=3.2)))
+# robust MATURE value -> late regardless of drift
+ck("robust MATURE value -> late", 'OBJECTIVELY_LATE' in entry.hard_vetoes(_lc(dist_low=1.2, rel_premium=1.1, value={'value_state':'MATURE'})))
+# robust CHEAP value rescues a corrupt session-low extension
+ck("robust CHEAP value rescues session extension", 'OBJECTIVELY_LATE' not in entry.hard_vetoes(_lc(dist_low=6.0, rel_premium=None, value={'value_state':'CHEAP'})))
+# no capture ref + extended + no value history -> late (expensive, not shown cheap)
+ck("no ref + extended + no value -> late", 'OBJECTIVELY_LATE' in entry.hard_vetoes(_lc(dist_low=6.0, rel_premium=None, value={})))
+# not expensive at all -> never late
+ck("cheap and un-extended -> not late", 'OBJECTIVELY_LATE' not in entry.hard_vetoes(_lc(dist_low=1.1, rel_premium=1.0)))
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

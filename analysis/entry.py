@@ -90,8 +90,25 @@ def hard_vetoes(c: dict) -> list:
         # a genuine shakeout's transient lower-low is not a premium REJECTION of the thesis.
         if not shakeout:
             v.append('PREMIUM_REJECTION')                     # heavy volume but premium making lower lows
-    if (c.get('dist_low', 1.0) or 1.0) > config.ENTRY_HARD_EXTENSION:
-        v.append('OBJECTIVELY_LATE')                          # objectively-late extension
+    # OBJECTIVELY_LATE — "we identified it late", not "it moved fast" (TSLA 350C 08/21 Catch-22).
+    # Robust ValueState is authoritative when known: MATURE (top of the contract's own history) means we
+    # found it already-rich → late even if it hasn't moved since; CHEAP/FAIR → never late. Otherwise
+    # LATE only when EXPENSIVE NOW (session-low extension or EXTENDED value) *and* we did NOT identify it
+    # while cheap — i.e. premium DRIFT since first capture (rel_premium) ran past LATE_MAX_DRIFT. A small
+    # drift means any extension is our own confirmation latency, not a chase → not late.
+    drift = c.get('rel_premium')                              # current mark / premium at first identification
+    vstate = (c.get('value') or {}).get('value_state')
+    if vstate == 'MATURE':
+        v.append('OBJECTIVELY_LATE')                          # already at the top of its own value history
+    elif vstate in ('CHEAP', 'FAIR'):
+        pass                                                  # robust value says still cheap — never late
+    else:
+        expensive_now = ((c.get('dist_low', 1.0) or 1.0) > config.ENTRY_HARD_EXTENSION
+                         or vstate == 'EXTENDED')
+        identified_cheap = (config.LATE_BY_DRIFT_ENABLED and drift is not None
+                            and drift <= config.LATE_MAX_DRIFT)
+        if expensive_now and not identified_cheap:
+            v.append('OBJECTIVELY_LATE')                      # genuinely late — found it after it ran
     return v
 
 
