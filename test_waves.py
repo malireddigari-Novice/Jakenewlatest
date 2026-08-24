@@ -306,19 +306,24 @@ ck("rank-2 strong campaign IS proposed with routes ON (MSFT 495C fix)", len(on['
 config.ENTRY_ROUTES_ENABLED = False
 
 
-# 2026-08-22: entry re-arm — a STABILIZING wave (not yet entered) keeps its one entry chance (TSLA 350C)
+# 2026-08-22: EntryWindow — entry eligibility is the OPEN window, decoupled from lifecycle state (TSLA 350C)
 class _W:
-    def __init__(self, state, issued): self.state=state; self.entry_issued=issued
+    def __init__(self, state, issued, ew_open=True, opened_at=0.0):
+        self.state=state; self.entry_issued=issued
+        self.ew_open=ew_open; self.ew_opened_at=opened_at; self.ew_reason=''
 _we = WaveEngine()
-config.ENTRY_REARM_ENABLED = True
-ck("FORMING is entry-eligible", _we._can_enter_state(_W('FORMING', False)))
-ck("ACTIVE is entry-eligible", _we._can_enter_state(_W('ACTIVE', False)))
-ck("STABILIZING is entry-eligible when re-arm ON (TSLA fix)", _we._can_enter_state(_W('STABILIZING', False)))
-ck("already-entered wave is NOT eligible", not _we._can_enter_state(_W('ACTIVE', True)))
-ck("MATURE/DECAYING is NOT eligible", not _we._can_enter_state(_W('MATURE', False)))
-config.ENTRY_REARM_ENABLED = False
-ck("STABILIZING NOT eligible when re-arm OFF (legacy)", not _we._can_enter_state(_W('STABILIZING', False)))
-config.ENTRY_REARM_ENABLED = True
+config.ENTRY_WINDOW_ENABLED = True
+NOW = 100.0   # opened_at=0 -> age 100 min < 60? no. use opened_at close to NOW so not expired
+ck("FORMING + open window -> eligible", _we._can_enter_state(_W('FORMING', False, opened_at=NOW), NOW))
+ck("ACTIVE + open window -> eligible", _we._can_enter_state(_W('ACTIVE', False, opened_at=NOW), NOW))
+ck("MATURE + open window -> eligible (THE TSLA FIX: lifecycle != eligibility)",
+   _we._can_enter_state(_W('MATURE', False, opened_at=NOW), NOW))
+ck("STABILIZING + open window -> eligible", _we._can_enter_state(_W('STABILIZING', False, opened_at=NOW), NOW))
+ck("already-entered -> NOT eligible", not _we._can_enter_state(_W('ACTIVE', True, opened_at=NOW), NOW))
+ck("ENDED -> NOT eligible", not _we._can_enter_state(_W('ENDED', False, opened_at=NOW), NOW))
+ck("closed window -> NOT eligible", not _we._can_enter_state(_W('MATURE', False, ew_open=False, opened_at=NOW), NOW))
+ck("aged-out window -> NOT eligible (expires past ENTRY_WINDOW_MAX_MIN)",
+   not _we._can_enter_state(_W('MATURE', False, opened_at=0.0), (config.ENTRY_WINDOW_MAX_MIN + 5) * 60.0))
 
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

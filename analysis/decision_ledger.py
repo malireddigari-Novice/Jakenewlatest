@@ -15,7 +15,8 @@ import json
 
 def build_record(*, now, ticker, side, metric, cand, decision, owner,
                  veto_reasons=None, code_version=None, config_hash=None,
-                 candidate_expiry=None, candidate_strike=None, runtime_flags=None) -> dict:
+                 candidate_expiry=None, candidate_strike=None, runtime_flags=None,
+                 entry_window=None) -> dict:
     m = metric or {}
     c = cand or {}
     inv = c.get('inventory') or {}
@@ -76,6 +77,8 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
         'route_contributions': (c.get('route_decision') or {}).get('contributions'),
         'route_top_drag': (c.get('route_decision') or {}).get('top_drag'),
         'route_shortfall': (c.get('route_decision') or {}).get('shortfall'),
+        # EntryWindow (2026-08-22): entry eligibility decoupled from campaign lifecycle state
+        **(entry_window or {}),
         # decision — the whole point
         'decision': decision, 'owner': owner,
         'veto_reasons': list(veto_reasons or []),        # ALL gate failures, not just the first

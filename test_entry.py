@@ -37,8 +37,10 @@ ck("a mature/exit event shape is a hard veto",
    entry.hard_veto({**cand(), 'shape': 'MATURE_SCALING_ACTIVITY'}) == 'ECONOMICALLY_VALID_REJECTION')
 ck("HEAVY_VOLUME_NEGATIVE_RESPONSE is a hard veto (the GOOGL 362.5C case)",
    entry.hard_veto({**cand(), 'shape': 'HEAVY_VOLUME_NEGATIVE_RESPONSE'}) == 'ECONOMICALLY_VALID_REJECTION')
-ck("ISOLATED_PRINT is a hard veto (lone/late chase)",
-   entry.hard_veto({**cand(), 'shape': 'ISOLATED_PRINT'}) == 'ECONOMICALLY_VALID_REJECTION')
+# 2026-08-22: ISOLATED_PRINT is a VALID standalone archetype (DOMINANT_STANDALONE), NOT an exit shape.
+# A fresh isolated impulse must not be exit-vetoed; a late one is caught by OBJECTIVELY_LATE instead.
+ck("ISOLATED_PRINT is NOT an EXIT_SHAPE veto (valid standalone archetype)",
+   'EXIT_SHAPE' not in entry.hard_vetoes({**cand(), 'shape': 'ISOLATED_PRINT'}))
 ck("decide() refuses a DISTRIBUTION archetype even at high asymmetry",
    not entry.decide(cand(arch='DISTRIBUTION'), m())['pass'])
 

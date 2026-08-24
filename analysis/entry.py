@@ -44,9 +44,13 @@ def _clamp(x):
 # collapsing premium, or is a lone/late chase. Route mode bypasses the soft accumulation/shape gates,
 # so these have to be hard vetoes here. Expanded 2026-08-06 after route mode entered a GOOGL 362.5C
 # HEAVY_VOLUME_NEGATIVE_RESPONSE (premium being destroyed) and an AMZN ISOLATED_PRINT late-chase.
+# 2026-08-22: ISOLATED_PRINT is REMOVED — a lone one-minute print is a valid high-information archetype
+# (DOMINANT_STANDALONE: AAPL 307.5P, TSLA open), the *beginning* of a campaign, not inherently an exit.
+# A FRESH isolated impulse (cheap, small drift) must not be exit-vetoed; a LATE isolated exit-print is
+# caught by OBJECTIVELY_LATE (value/drift), not by the shape label. The rest remain genuine exit shapes.
 _EXIT_SHAPES = {'MATURE_SCALING_ACTIVITY', 'DISTRIBUTION_AT_PREMIUM_HIGH',
                 'EXHAUSTION_OR_EXIT_FLOW', 'STALE_OPENING_VOLUME',
-                'HEAVY_VOLUME_NEGATIVE_RESPONSE', 'ISOLATED_PRINT'}
+                'HEAVY_VOLUME_NEGATIVE_RESPONSE'}
 # Only these two exit-shapes are AMBIGUOUS between a shakeout and a true exit — a high-gamma dip can
 # print heavy volume + a negative response and still be a retracement inside an intact accumulation.
 # The others (premium-at-high distribution, stale opening, mature scaling, lone late print) are NOT

@@ -520,6 +520,16 @@ EXIT_PERSIST_FRAC     = float(os.getenv('EXIT_PERSIST_FRAC', '0.5'))   # ≥ thi
 # entering can still take its one entry on a later clean poll while cheap — the entry chance is not
 # lost just because the opening auction noise pushed it out of ACTIVE for a few polls (TSLA 350C).
 ENTRY_REARM_ENABLED   = os.getenv('ENTRY_REARM_ENABLED', 'true').lower() == 'true'
+
+# 2026-08-22 — ENTRY WINDOW: separate campaign LIFECYCLE state (FORMING/ACTIVE/MATURE/…) from ENTRY
+# ELIGIBILITY. Entry must NOT depend on the accidental coincidence of wave_state==ACTIVE and a clean
+# instantaneous shape on the SAME poll (TSLA 350C: cheap $2-3 for ~20 min but ACTIVE & good-shape polls
+# never aligned). Once a campaign first becomes entry-capable the window OPENS and stays open through
+# ACTIVE/MATURE/STABILIZING/DECAYING until the wave ends, the trade fires, the window ages out, or a
+# genuine economic invalidator (late/value/distribution/reversal — enforced by the per-poll _open_wave
+# gates) rejects it. This supersedes the ACTIVE-only / re-arm eligibility when enabled.
+ENTRY_WINDOW_ENABLED  = os.getenv('ENTRY_WINDOW_ENABLED', 'true').lower() == 'true'
+ENTRY_WINDOW_MAX_MIN  = float(os.getenv('ENTRY_WINDOW_MAX_MIN', '60'))  # safety: an un-taken window expires after this
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 

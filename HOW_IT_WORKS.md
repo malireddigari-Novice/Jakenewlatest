@@ -822,6 +822,21 @@ accumulating window (too little history → veto stands); **(2) entry re-arm**
 entering keeps its one entry chance (all §16/route gates still apply, so it widens *when* we may try,
 not *what* qualifies). Regression `test_regression.py` replays the TSLA 350C 08/21 sequence.
 
+**FIXED (2026-08-23): EntryWindow — separate campaign lifecycle from entry eligibility.** The deepest
+TSLA cause: entry required the *accidental coincidence* of `wave_state==ACTIVE` **and** a clean
+instantaneous shape on the **same** poll — but its opening flips shape poll-to-poll and cools ACTIVE→
+MATURE within a minute, so the two never aligned during the cheap $2–3 window. Now a **persistent
+EntryWindow** (`Wave.ew_open`, `waves._can_enter_state`, `ENTRY_WINDOW_ENABLED`) opens when a campaign
+first becomes entry-relevant (FORMING birth) and stays open across **ACTIVE→MATURE→STABILIZING→
+DECAYING** until the trade fires, the wave ends, the window ages out (`ENTRY_WINDOW_MAX_MIN`), or a
+genuine economic invalidator rejects it. The per-poll value/late/shape/EV gates in `_open_wave` remain
+the "still actionable?" test — so this widens *when* we may try, not *what* qualifies. Campaign lifecycle
+state (MATURE) no longer implies premium maturity (value/late own that). Also **ISOLATED_PRINT is no
+longer an exit shape** — it's a valid standalone archetype (DOMINANT_STANDALONE); a late lone print is
+caught by OBJECTIVELY_LATE, not the shape label. The ledger now logs `entry_window` / `_age_s` /
+`campaign_state` per candidate. Tests: `test_waves.py` (EntryWindow eligibility), `test_entry.py`
+(ISOLATED_PRINT freed), `test_regression.py` (TSLA).
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

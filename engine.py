@@ -471,7 +471,8 @@ class AttentionEngine:
                                    veto_reasons=([] if rej is None else self._hard_vetoes(cc, metrics_by.get(en['ticker']), now) or [rej]),
                                    strike=(cc or {}).get('best', {}).get('strike'),
                                    expiry=(self._expiry.get(en['ticker']).isoformat()
-                                           if self._expiry.get(en['ticker']) else None))
+                                           if self._expiry.get(en['ticker']) else None),
+                                   wave=en.get('wave'))
                 if config.RESEARCH_ARCHIVE_ENABLED:
                     self.archive.write(replay.candidate_record(
                         now, en['ticker'], en['side'], metrics_by.get(en['ticker']),
@@ -1137,15 +1138,28 @@ class AttentionEngine:
             pass
         return v
 
-    def _log_decision(self, now, sym, side, m, c, decision, owner, veto_reasons, expiry=None, strike=None) -> None:
+    def _log_decision(self, now, sym, side, m, c, decision, owner, veto_reasons, expiry=None,
+                      strike=None, wave=None) -> None:
         """item 17: append one immutable Decision Ledger record. Never disrupts trading."""
         if not config.DECISION_LEDGER_ENABLED:
             return
         try:
+            ew = {}
+            if wave is not None:
+                age = None
+                if getattr(wave, 'ew_opened_at', None) is not None:
+                    try:
+                        age = round((now - wave.ew_opened_at).total_seconds()) if hasattr(wave.ew_opened_at, 'total_seconds') \
+                              else round(now.timestamp() - float(wave.ew_opened_at))
+                    except Exception:
+                        age = None
+                ew = {'entry_window': ('OPEN' if getattr(wave, 'ew_open', False) else 'CLOSED'),
+                      'entry_window_reason': getattr(wave, 'ew_reason', None),
+                      'entry_window_age_s': age, 'campaign_state': getattr(wave, 'state', None)}
             rec = decision_ledger.build_record(
                 now=now, ticker=sym, side=side, metric=m, cand=c, decision=decision, owner=owner,
                 veto_reasons=veto_reasons, code_version=self._code_version, config_hash=self._config_hash,
-                candidate_expiry=expiry, candidate_strike=strike,
+                candidate_expiry=expiry, candidate_strike=strike, entry_window=ew,
                 runtime_flags={'MULTI_CAMPAIGN': config.MULTI_CAMPAIGN_ENABLED,
                                'REVERSAL': config.REVERSAL_ENABLED,
                                'QUALIFIED_CONTROL': config.QUALIFIED_CONTROL_ENABLED,
@@ -1200,6 +1214,10 @@ class AttentionEngine:
         if not c or not c.get('best'):
             return 'DATA_QUALITY_REJECTION'
         best = c['best']
+        # EntryWindow: record the premium at which the window first became actionable (for the ledger's
+        # PremiumAtFirstInformationEvent vs current-poll comparison and convexity-since-open reads).
+        if getattr(w, 'ew_opened_price', None) is None and best.get('mark'):
+            w.ew_opened_price = best.get('mark')
         # §10 archetype routes: when enabled, a candidate that clears the hard vetoes AND scores
         # enough total expected-asymmetry on its archetype route ENTERS — the soft conjunctive gates
         # below are bypassed (each is guarded by `not route_ok`). Microstructure vetoes still apply.

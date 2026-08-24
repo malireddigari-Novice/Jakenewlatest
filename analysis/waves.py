@@ -27,7 +27,9 @@ class Wave:
     __slots__ = ('ticker', 'side', 'wave_id', 'state', 'start_ts', 'last_ts', 'active_ts',
                  'peak_mass', 'peak_share', 'peak_z', 'peak_vel', 'cum_mass', 'entry_issued',
                  'forming_evals', 'active_evals', 'flip_evals', 'exhaust_evals', 'end_reason',
-                 'dte', 'reduced', 'stabilize_ts', 'confidence')
+                 'dte', 'reduced', 'stabilize_ts', 'confidence',
+                 # EntryWindow (2026-08-22): entry eligibility, decoupled from lifecycle state
+                 'ew_open', 'ew_opened_at', 'ew_opened_price', 'ew_reason')
 
     def __init__(self, ticker, side, wave_id, ts, dte=None):
         self.ticker, self.side, self.wave_id = ticker, side, wave_id
@@ -43,6 +45,13 @@ class Wave:
         self.reduced = False        # a deterioration-driven partial exit already taken
         self.stabilize_ts = None    # when the wave entered STABILIZING (campaign-memory timeout)
         self.confidence = None      # follow-up §4-7: stateful CampaignConfidence (set on first hold)
+        # EntryWindow: a FORMING wave is already entry-relevant (we enter early on value), so the
+        # window opens at birth and stays open across the lifecycle until entry / end / expiry /
+        # a genuine invalidator — NOT closed merely because the label moves ACTIVE→MATURE.
+        self.ew_open = True
+        self.ew_opened_at = ts
+        self.ew_opened_price = None   # set by the engine on the first entry proposal (needs the mark)
+        self.ew_reason = 'OPENED_AT_FORMING'
 
     def go_active(self, ts):
         self.state = 'ACTIVE'
@@ -110,13 +119,23 @@ class WaveEngine:
                      or (m['mass_z'] >= config.WAVE_LEAD_Z_MID and m['impulse'] >= config.WAVE_LEAD_IMPULSE
                          and m['velocity'] > 0 and m['acceleration'] > 0)))
 
-    def _can_enter_state(self, w) -> bool:
-        """Entry-eligible wave states. A wave enters EARLY (FORMING) or when ACTIVE; the 2026-08-22
-        re-arm also lets a wave that cooled to STABILIZING (intact but resting) take its one entry —
-        opening-auction noise pushing it out of ACTIVE must not forfeit the trade (TSLA 350C). All the
-        §16/route entry gates still apply downstream, so this widens WHEN we may try, not WHAT qualifies."""
+    def _can_enter_state(self, w, now=None) -> bool:
+        """Entry eligibility. With ENTRY_WINDOW (2026-08-22): the campaign LIFECYCLE state is decoupled
+        from ENTRY ELIGIBILITY — a wave stays entry-eligible while its EntryWindow is OPEN (through
+        ACTIVE→MATURE→STABILIZING→DECAYING), so a fast opening campaign whose ACTIVE polls and clean-
+        shape polls don't coincide isn't locked out (TSLA 350C). The per-poll §16/route/value/late
+        gates in the engine are the real 'still economically actionable' test; the window only ages out
+        (safety) or closes when the wave ends / the trade fires. Legacy state-list path when disabled."""
         if not w or w.entry_issued:
             return False
+        if config.ENTRY_WINDOW_ENABLED:
+            if not w.ew_open or w.state == 'ENDED':
+                return False
+            if now is not None and w.ew_opened_at is not None:
+                if _mins(now, w.ew_opened_at) > config.ENTRY_WINDOW_MAX_MIN:
+                    w.ew_open = False; w.ew_reason = 'EXPIRED'
+                    return False
+            return True
         states = (('FORMING', 'ACTIVE', 'STABILIZING') if config.ENTRY_REARM_ENABLED
                   else ('FORMING', 'ACTIVE'))
         return w.state in states
@@ -310,9 +329,10 @@ class WaveEngine:
                 # Enter EARLY — a FORMING wave qualifies (volume-leading-price, §2), not only a
                 # fully-ACTIVE one at z=8. The value gate (engine: mark <= 1.5x session low) is what
                 # keeps this from buying after the pop; here we just allow the earlier state.
-                # 2026-08-22 re-arm: a wave that cooled ACTIVE→STABILIZING (intact but resting) without
-                # ever entering keeps its one entry chance (see _can_enter_state).
-                if not self._can_enter_state(w):
+                # 2026-08-22: entry eligibility via the persistent EntryWindow (see _can_enter_state) —
+                # a live campaign stays proposable across ACTIVE/MATURE/STABILIZING, not just on the
+                # accidental ACTIVE poll. The engine's per-poll value/late/shape gates decide each time.
+                if not self._can_enter_state(w, now):
                     continue
                 if (t, side) in held:
                     continue
@@ -505,6 +525,8 @@ class WaveEngine:
                 'watched': margin >= config.WAVE_ROT_WATCH_MARGIN}
 
     def _end(self, key, w, m, ts):
+        if w is not None:
+            w.ew_open = False; w.ew_reason = 'CAMPAIGN_ENDED'    # close the EntryWindow when the wave ends
         self.refractory[key] = {'until': _plus_min(ts, config.WAVE_REFRACTORY_MIN),
                                 'post_min': (m or {}).get('fast_mass', 0.0)}
         self.early.pop(key, None)          # Phase 2: a new campaign re-measures latency from scratch
