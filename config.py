@@ -725,6 +725,13 @@ CONF_PEN_PREMIUM      = float(os.getenv('CONF_PEN_PREMIUM', '0.12'))   # premium
 CONF_PEN_HL           = float(os.getenv('CONF_PEN_HL', '0.08'))        # higher-low structure failing
 CONF_RECOVER_BONUS    = float(os.getenv('CONF_RECOVER_BONUS', '0.12')) # reaccelerating / active again
 CONF_HOLD_BONUS       = float(os.getenv('CONF_HOLD_BONUS', '0.03'))    # healthy drift-up while holding
+# 2026-08-24 exit-regression fixes (NVDA 210C 3-min death, MSFT 490P rotation exit):
+# (1) ROTATION is a DISCOVERY signal — another Mag-7 ticker becoming stronger must NEVER close an
+#     existing position. Rotation no longer penalizes CampaignConfidence at all when enabled.
+# (2) A confidence dip below the exit threshold must PERSIST for a few polls before it flattens the
+#     campaign — one liquidity-sweep / one-poll higher-low failure near the open is not floor-break.
+ROTATION_EXIT_DISABLED   = os.getenv('ROTATION_EXIT_DISABLED', 'true').lower() == 'true'
+CONF_EXIT_PERSIST_EVALS  = int(os.getenv('CONF_EXIT_PERSIST_EVALS', '3'))  # consecutive sub-threshold polls to exit
 # HoldScore snapshot weights (positive block sums ≈1; distribution/opp subtract).
 HS_W_CONF     = float(os.getenv('HS_W_CONF', '0.30'))
 HS_W_SELFSUST = float(os.getenv('HS_W_SELFSUST', '0.15'))
@@ -1159,6 +1166,7 @@ NEAR_MISS_ROUTES        = [r.strip() for r in os.getenv(
     'NEAR_MISS_ROUTES', 'CROSS_STRIKE,PERSISTENT_BUILD,SHAKEOUT_RECOVERY,FAST_SHOCK,STAIR_STEP').split(',') if r.strip()]
 NEAR_MISS_MIN_INTERVAL_S = int(os.getenv('NEAR_MISS_MIN_INTERVAL_S', '600'))  # throttle per (ticker,side)
 NEAR_MISS_MAX_DIST_PROB  = float(os.getenv('NEAR_MISS_MAX_DIST_PROB', '0.40'))
+NEAR_MISS_REALERT_DELTA  = float(os.getenv('NEAR_MISS_REALERT_DELTA', '0.05'))  # re-alert only on this much score gain
 
 # EOD attrition report — the entry funnel + hard-veto breakdown + near-miss buckets, so we can see
 # exactly where candidates are lost (the audit's ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ENTRY_READY view).

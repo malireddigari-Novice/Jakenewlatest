@@ -91,6 +91,7 @@ class AttentionEngine:
         self._dq: dict = {}                # #11-12: (sym) -> {contract: quote confidence 0..1}
         self._code_version, self._config_hash = self._provenance()   # item 17: ledger stamps
         self._nm_ts: dict = {}             # near-miss alert throttle: (sym,side) -> last alert ts
+        self._nm_last_score: dict = {}     # near-miss dedup: (sym,side) -> last alerted route score
         self._attr = self._new_attrition() # EOD entry-funnel attrition counters
         self._shape_hist: dict = {}        # rolling-shape: (sym,side) -> [recent price-response shapes]
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
@@ -196,6 +197,7 @@ class AttentionEngine:
             self.state['day'] = today.isoformat()
             self._attr = self._new_attrition()     # reset the EOD attrition funnel each session
             self._nm_ts.clear()
+            self._nm_last_score.clear()
             self._shape_hist.clear()               # rolling-shape history is intraday
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
@@ -1188,9 +1190,17 @@ class AttentionEngine:
         if max(qcs, ctrl or 0.0) < 0.55:                       # some real directional control required
             return
         key = (sym, side)
+        # dedup: one WATCH per campaign, re-alerting ONLY on a MATERIAL score improvement — not a fresh
+        # card every interval for the same stagnant candidate (the repeated NVDA 210C cards).
         last = self._nm_ts.get(key)
-        if last and (now - last).total_seconds() < config.NEAR_MISS_MIN_INTERVAL_S:
-            return
+        last_score = self._nm_last_score.get(key)
+        improved = last_score is None or (dec['score'] - last_score) >= config.NEAR_MISS_REALERT_DELTA
+        if last is not None:
+            if not improved:
+                return                                        # same campaign, no material change → silent
+            if (now - last).total_seconds() < config.NEAR_MISS_MIN_INTERVAL_S and last_score is not None:
+                return                                        # too soon even for an improvement
+        self._nm_last_score[key] = dec['score']
         self._nm_ts[key] = now
         self._attr['near_miss_alerts'] += 1
         best = c.get('best') or {}
@@ -1204,7 +1214,7 @@ class AttentionEngine:
                                   acceptance=(c.get('acceptance') or {}).get('label'), top_drag=drag, now=now)
         except Exception:
             logger.warning("near-miss alert card failed (non-fatal)", exc_info=True)
-        logger.info("NEAR-MISS-WATCH %s %s %s route=%s score=%.2f/%.2f value=%s qctrl=%.2f drag=[%s] "
+        logger.info("NEAR-MISS-WATCH %s %s %s route=%s score=%.3f/%.3f value=%s qctrl=%.2f drag=[%s] "
                     "— RESEARCH ONLY, no entry", sym, side, best.get('strike'), route, dec['score'],
                     config.ENTRY_ROUTE_MIN_SCORE, vs, max(qcs, ctrl or 0.0), drag)
 
@@ -1239,7 +1249,7 @@ class AttentionEngine:
                 else:
                     # genuinely SCORED but below threshold — the near-miss population.
                     self._attr['qualified'].add(wid)
-                    logger.info("ENTRY-REJECT %s %s route=%s asym=%.2f<%.2f (%s) | contrib=%s | top_drag=[%s]",
+                    logger.info("ENTRY-REJECT %s %s route=%s asym=%.3f<%.3f (%s) | contrib=%s | top_drag=[%s]",
                                 sym, side, dec.get('route'), dec['score'], config.ENTRY_ROUTE_MIN_SCORE,
                                 dec['reason'], dec.get('contributions'), drag)
                     if dec['score'] >= config.NEAR_MISS_MIN_SCORE:
@@ -1251,7 +1261,7 @@ class AttentionEngine:
             self._attr['route_passed'].add(wid)     # ROUTE_PASSED — NOT yet entry-eligible (post-route
             #                                          hard gates below can still veto: barshock, inventory
             #                                          PASS, package, portfolio, execution, late-0DTE, hyp)
-            logger.info("ENTRY-ROUTE %s %s %s asym=%.2f (archetype=%s) — soft gates bypassed",
+            logger.info("ENTRY-ROUTE %s %s %s asym=%.3f (archetype=%s) — soft gates bypassed",
                         sym, side, dec['route'], dec['score'], dec['archetype'])
             # P1 overnight hysteresis: a surviving opposite-side campaign raises the bar (Friday's
             # first AMZN put must overcome Thursday's funded call campaign).

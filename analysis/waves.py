@@ -27,7 +27,7 @@ class Wave:
     __slots__ = ('ticker', 'side', 'wave_id', 'state', 'start_ts', 'last_ts', 'active_ts',
                  'peak_mass', 'peak_share', 'peak_z', 'peak_vel', 'cum_mass', 'entry_issued',
                  'forming_evals', 'active_evals', 'flip_evals', 'exhaust_evals', 'end_reason',
-                 'dte', 'reduced', 'stabilize_ts', 'confidence',
+                 'dte', 'reduced', 'stabilize_ts', 'confidence', 'conf_exit_evals',
                  # EntryWindow (2026-08-22): entry eligibility, decoupled from lifecycle state
                  'ew_open', 'ew_opened_at', 'ew_opened_price', 'ew_reason')
 
@@ -45,6 +45,7 @@ class Wave:
         self.reduced = False        # a deterioration-driven partial exit already taken
         self.stabilize_ts = None    # when the wave entered STABILIZING (campaign-memory timeout)
         self.confidence = None      # follow-up §4-7: stateful CampaignConfidence (set on first hold)
+        self.conf_exit_evals = 0    # consecutive polls confidence has been below the exit threshold
         # EntryWindow: a FORMING wave is already entry-relevant (we enter early on value), so the
         # window opens at birth and stays open across the lifecycle until entry / end / expiry /
         # a genuine invalidator — NOT closed merely because the label moves ACTIVE→MATURE.
@@ -458,7 +459,10 @@ class WaveEngine:
                                and ctrl >= config.WAVE_ACTIVE_CONTROL
                                and m.get('info_share', 0.0) >= config.WAVE_ABSOLUTE_INFO_SHARE
                                and self._side_vel(m, side) > 0))
-        rotation_active = bool(rot and rot.get('ticker') != t and rot.get('watched'))
+        # 2026-08-24: rotation is DISCOVERY, not an exit driver — another Mag-7 ticker becoming stronger
+        # must never erode this campaign's confidence (MSFT 490P was flattened by NVDA taking the board).
+        rotation_active = (bool(rot and rot.get('ticker') != t and rot.get('watched'))
+                           and not config.ROTATION_EXIT_DISABLED)
         prev = w.confidence
         new_conf, dominant = hold.confidence_step(w.confidence, f, rotation_active)
         w.confidence = new_conf
@@ -475,12 +479,24 @@ class WaveEngine:
             # confidence eroded, a dominant OPPOSITE-side cause (control loss / opposite strengthening)
             # must NOT exit here when REVERSAL owns opposite exits — that closes the GOOGL/NVDA backdoor.
             if config.REVERSAL_ENABLED and dominant in ('CONTROL', 'OPP_SIDE'):
+                w.conf_exit_evals = 0
                 log.append(f"{w.wave_id} CONFIDENCE-EXIT SUPPRESSED cause={dominant} — ReversalCluster "
                            f"owns opposite-side exits (item 2)")
                 return None
+            # 2026-08-24: floor-break PERSISTENCE — a single sub-threshold poll (a liquidity sweep / one
+            # higher-low failure near the open) must not flatten the campaign. Require the confidence to
+            # stay below the exit threshold for CONF_EXIT_PERSIST_EVALS consecutive polls (NVDA 210C died
+            # in ~3 min on one-poll premium noise). A recovering poll resets the counter.
+            w.conf_exit_evals += 1
+            if w.conf_exit_evals < config.CONF_EXIT_PERSIST_EVALS:
+                log.append(f"{w.wave_id} CONFIDENCE-LOW conf={new_conf:.2f}<{config.HOLD_EXIT_THRESHOLD} "
+                           f"cause={dominant} persist={w.conf_exit_evals}/{config.CONF_EXIT_PERSIST_EVALS} "
+                           f"— holding (not yet floor-break)")
+                return None
             log.append(f"{w.wave_id} CONFIDENCE-EXIT conf={new_conf:.2f}<{config.HOLD_EXIT_THRESHOLD} "
-                       f"cause={dominant}")
+                       f"cause={dominant} persist={w.conf_exit_evals}")
             return hold.exit_reason_from(dominant, f)
+        w.conf_exit_evals = 0          # confidence recovered above threshold — reset the persistence count
         return None
 
     def _label_hold_state(self, w, f, log):

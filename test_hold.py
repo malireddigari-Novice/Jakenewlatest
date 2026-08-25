@@ -105,14 +105,24 @@ we2.waves[('NVDA', 'CALL')].entry_issued = True
 t += 300
 BADH = {'control_ok': False, 'opp_strong': True, 'dist_high': True, 'progressing': False,
         'higher_low': False, 'self_sustaining': False}
-exits = []
-for _ in range(4):
+def _bad_poll():
+    global t
     t += 60
     bad = metric('NVDA', share=0.1, z=0.5, ctrl=0.4, vel=-100, acc=-100)
-    exits += we2.evaluate([bad], {'NVDA': bad}, {('NVDA', 'CALL')}, t, health_by={('NVDA', 'CALL'): BADH})['exit']
+    return we2.evaluate([bad], {'NVDA': bad}, {('NVDA', 'CALL')}, t, health_by={('NVDA', 'CALL'): BADH})['exit']
+# 2026-08-24 floor-break persistence: the FIRST sub-threshold poll must NOT exit (one-poll noise).
+first_batch = []
+for _ in range(3):
+    first_batch += _bad_poll()
+ck("does NOT exit on the first deterioration poll(s) — floor-break persistence",
+   not first_batch)
+# but SUSTAINED deterioration (past CONF_EXIT_PERSIST_EVALS) exits with a §20 label.
+exits = []
+for _ in range(4):
+    exits += _bad_poll()
 LABELS = {'VERIFIED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER', 'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED',
           'PREMIUM_STRUCTURE_FAILURE', 'RESILIENCE_FAILURE', 'TRUE_MULTI_VARIABLE_EXHAUSTION'}
-ck("verified deterioration exits with a §20 confidence label",
+ck("SUSTAINED deterioration exits with a §20 confidence label",
    any(e['reason'] in LABELS for e in exits))
 config.CAMPAIGN_CONFIDENCE_ENABLED = False
 

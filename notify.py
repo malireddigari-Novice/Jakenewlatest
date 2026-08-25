@@ -151,7 +151,7 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
     """🟡 RESEARCH-ONLY near-miss WATCH — a genuinely-scored candidate just under the execution
     boundary. Explicitly NOT a trade; collects live evidence on whether 0.50-0.54 events are tradeable."""
     fields = [
-        {'name': 'Route score', 'value': f"**{score:.2f}** / {threshold:.2f}  (short {shortfall})", 'inline': True},
+        {'name': 'Route score', 'value': f"**{score:.3f}** / {threshold:.3f}  (short {shortfall})", 'inline': True},
         {'name': 'Archetype', 'value': f"{archetype}\n`{route}`", 'inline': True},
         {'name': 'Top drag', 'value': top_drag or '—', 'inline': True},
         {'name': 'Qualified control', 'value': f"{100*(qual_control or 0):.0f}%", 'inline': True},
@@ -163,7 +163,7 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
     ]
     _post({
         'title': f"🟡 NEAR-MISS WATCH  {sym} {side} {strike:g}" if strike is not None else f"🟡 NEAR-MISS WATCH  {sym} {side}",
-        'description': (f"High-quality event **{score:.2f}/{threshold:.2f}** — below the entry boundary. "
+        'description': (f"High-quality event **{score:.3f}/{threshold:.3f}** — below the entry boundary. "
                         f"**RESEARCH ONLY — no order placed.** Watching whether this converts."),
         'color': _AMBER,
         'fields': fields,

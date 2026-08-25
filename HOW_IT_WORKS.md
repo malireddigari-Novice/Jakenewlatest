@@ -837,6 +837,39 @@ caught by OBJECTIVELY_LATE, not the shape label. The ledger now logs `entry_wind
 `campaign_state` per candidate. Tests: `test_waves.py` (EntryWindow eligibility), `test_entry.py`
 (ISOLATED_PRINT freed), `test_regression.py` (TSLA).
 
+### Exit-regression fixes (2026-08-24) — Monday's first entries died in 3–5 min
+
+Monday 08/24 was the first session on the full stack and it *entered* (NVDA 210C, MSFT 490P) — progress
+from the zero streak — but both died fast: **NVDA at 3.5 min (`PREMIUM_STRUCTURE_FAILURE`)** and **MSFT
+at 5 min (`ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE`)**, both via CampaignConfidence. Two targeted fixes:
+
+- **Rotation is discovery-only, never an exit** (`ROTATION_EXIT_DISABLED`). Another Mag-7 ticker
+  becoming the attention leader no longer erodes an existing campaign's confidence — the invariant
+  *"AttentionShift ≠ CampaignEnded."* (MSFT 490P was flattened purely because NVDA took the board.)
+- **Floor-break persistence** (`CONF_EXIT_PERSIST_EVALS=3`). A confidence dip below the exit threshold
+  must persist for 3 consecutive polls before it flattens the campaign — one liquidity-sweep / one
+  higher-low failure near the open is not floor-break (NVDA 210C died on one-poll premium noise). A
+  recovering poll resets the counter. Combined with the drop-cap, a thesis exit now needs sustained
+  deterioration, not a 3-minute wobble. Hard stop / EOD / qualified reversal still act immediately.
+
+**Reporting fixes:** near-miss WATCH cards now **dedup** — one card per campaign, re-alerting only on a
+material score gain (`NEAR_MISS_REALERT_DELTA`), not a fresh card every 10 min for the same candidate;
+and route scores display **3 decimals** (0.548, not a contradictory "0.55/0.55").
+
+**Deferred to the next research phase (NOT done — honest scope):** the larger campaign-concurrency and
+information-quality work the 08/24 review called for is multi-session and not attempted here:
+cross-strike **campaign aggregation** (recognize one TSLA-put campaign across 345–362.5P and pick one
+expression, instead of per-strike evaluation); the **InformationMass** formula (√premium × abnormality
+× concentration × price-response × acceptance × coherence × freshness) so distributed theta-decay call
+volume contributes ~0 to qualified control; **value-floor / EventCostZone** tracking for floor-break;
+a labeled **morphology library** (DOMINANT_STANDALONE / CROSS_STRIKE_CLUSTER / VALUE_ACCEPTANCE vs
+PERSISTENT_DISTRIBUTED / ZERO_VALUE_CHURN); **WEAK_LEAN vs CONTROL** classification (NVDA 0.55 control
+is a lean, not control); and post-entry **CampaignShape** persistence separate from position mgmt.
+Four named regression cases are recorded for that phase: **NVDA 210C** (weak 0.55 control → should be
+LEAN), **MSFT 490P** (no rotation-only exit — it later hit +63%), **NVDA 212.5P** (73% put attention
+that produced no alert — silent-suppression bug), **TSLA put surface** (multi-strike bearish campaign),
+plus the TSLA-call negative control (distributed decay must rank below the clean put fingerprints).
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.
