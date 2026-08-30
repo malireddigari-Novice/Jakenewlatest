@@ -155,7 +155,12 @@ class SheetsLogger:
                 self._last_write_ts = time.monotonic()
                 self._write_queue.task_done()
 
-    def _insert_row(self, sheet_key, row, max_retries: int = 4) -> None:
+    # Google Sheets returns 429 (rate limit) and transient 5xx (500/502/503/504 — "service
+    # unavailable") that succeed on a retry. A 503 was silently dropping a trade row because only 429
+    # was retried; retry both so a momentary Google outage never loses an ENTRY/SCALE/EXIT row.
+    _RETRYABLE = (429, 500, 502, 503, 504)
+
+    def _insert_row(self, sheet_key, row, max_retries: int = 6) -> None:
         ws = self._ws(sheet_key)
         for attempt in range(max_retries):
             try:
@@ -163,8 +168,11 @@ class SheetsLogger:
                 return
             except self._gspread.exceptions.APIError as exc:
                 status = getattr(exc.response, 'status_code', None)
-                if status == 429 and attempt < max_retries - 1:
-                    time.sleep((2 ** attempt) + random.random())
+                if status in self._RETRYABLE and attempt < max_retries - 1:
+                    wait = min(30.0, (2 ** attempt) + random.random())
+                    logger.warning("Sheets write %s (attempt %d/%d) — retrying in %.1fs",
+                                   status, attempt + 1, max_retries, wait)
+                    time.sleep(wait)
                 else:
                     raise
 
