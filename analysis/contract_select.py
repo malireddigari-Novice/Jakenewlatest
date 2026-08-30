@@ -8,6 +8,7 @@ and still favorably priced (room from its low). This is how the engine can pick 
 noisier, higher-volume 220P. Consumes the per-strike shocks P2 produces.
 """
 import config
+from analysis import convexity
 
 
 def _room_from_low(mark, low, high):
@@ -31,9 +32,16 @@ def event_score(sd, spot, shock_info):
     liq = min(1.0, min(sd.get('bid_size') or 0, sd.get('ask_size') or 0) / max(1, config.GATE_MIN_QUOTE_SIZE))
     relevance = max(0.0, 1.0 - abs(sd['strike'] - spot) / (spot * 0.01)) if spot else 0.5
     room = _room_from_low(mark, sd.get('day_low'), sd.get('day_high'))
-    return round(config.ES_W_SHOCK * shock_term + config.ES_W_SIG * sig
-                 + config.ES_W_RELEVANCE * relevance + config.ES_W_SPREAD * spread_term
-                 + config.ES_W_LIQ * liq + config.ES_W_ROOM * room, 4)
+    base = (config.ES_W_SHOCK * shock_term + config.ES_W_SIG * sig
+            + config.ES_W_RELEVANCE * relevance + config.ES_W_SPREAD * spread_term
+            + config.ES_W_LIQ * liq + config.ES_W_ROOM * room)
+    total_w = (config.ES_W_SHOCK + config.ES_W_SIG + config.ES_W_RELEVANCE + config.ES_W_SPREAD
+               + config.ES_W_LIQ + config.ES_W_ROOM)
+    # P2: reward the best convexity-per-premium-dollar so we don't pick the expensive visible strike.
+    if config.CONVEXITY_SELECT_ENABLED:
+        base += config.ES_W_CONVEXITY * convexity.convexity_score(sd, spot)
+        total_w += config.ES_W_CONVEXITY
+    return round(base / total_w if total_w else base, 4)   # normalized to [0,1] regardless of weights
 
 
 def select(side, side_strikes, spot, shocks):
@@ -43,7 +51,10 @@ def select(side, side_strikes, spot, shocks):
     if not quotable:
         return None
     quotable.sort(key=lambda s: abs(s['strike'] - spot))
-    window = quotable[:config.EVENT_SELECT_WINDOW + 1]
+    # P2: scan the wider near-ATM surface (ATM±CONVEXITY_WINDOW) so a better-convexity neighbor strike
+    # can win over the loudest ATM one, instead of only ATM±EVENT_SELECT_WINDOW.
+    win = (config.CONVEXITY_WINDOW if config.CONVEXITY_SELECT_ENABLED else config.EVENT_SELECT_WINDOW)
+    window = quotable[:win + 1]
     scored = [(s, event_score(s, spot, (shocks or {}).get(s['strike']))) for s in window]
     scored = [(s, sc) for s, sc in scored if sc is not None]
     if not scored:
@@ -54,4 +65,6 @@ def select(side, side_strikes, spot, shocks):
     out['event_selected'] = True
     out['low_score'] = _room_from_low(out.get('mark'), out.get('day_low'), out.get('day_high'))
     out['is_atm'] = (out['strike'] == quotable[0]['strike'])
+    out['convexity_score'] = convexity.convexity_score(best, spot)
+    out['gamma_per_premium'] = round(convexity.gamma_per_premium(best.get('gamma'), best.get('mark')), 6)
     return out

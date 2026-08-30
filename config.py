@@ -538,6 +538,20 @@ ENTRY_WINDOW_MAX_MIN  = float(os.getenv('ENTRY_WINDOW_MAX_MIN', '60'))  # safety
 ABS_GATE_ENABLED      = os.getenv('ABS_GATE_ENABLED', 'true').lower() == 'true'
 ABS_MIN_SCORE         = float(os.getenv('ABS_MIN_SCORE', '50'))     # attention score below this = no auto entry
 ABS_MIN_DOMINANCE     = float(os.getenv('ABS_MIN_DOMINANCE', '0.60'))  # directional dominance below this = LEAN, WATCH
+
+# 2026-08-30 — P2 REMAINING-CONVEXITY contract ranking: prefer the best convexity-per-premium-dollar
+# expression across the near-ATM surface (ATM±CONVEXITY_WINDOW), not the loudest/most-expensive strike
+# (META 565C vs 570C/580C). Gamma-based (OPRA has no vega/theta).
+CONVEXITY_SELECT_ENABLED = os.getenv('CONVEXITY_SELECT_ENABLED', 'true').lower() == 'true'
+CONVEXITY_WINDOW      = int(os.getenv('CONVEXITY_WINDOW', '5'))     # scan ATM ± this many strikes
+CONVEXITY_GPP_REF     = float(os.getenv('CONVEXITY_GPP_REF', '0.05'))  # gamma/mark that earns full convexity credit
+CONVEXITY_MONEYNESS_PCT = float(os.getenv('CONVEXITY_MONEYNESS_PCT', '0.02'))
+CONVEXITY_W_GPP       = float(os.getenv('CONVEXITY_W_GPP', '0.5'))
+CONVEXITY_W_CHEAP     = float(os.getenv('CONVEXITY_W_CHEAP', '0.3'))
+CONVEXITY_W_REL       = float(os.getenv('CONVEXITY_W_REL', '0.2'))
+ES_W_CONVEXITY        = float(os.getenv('ES_W_CONVEXITY', '0.45'))  # weight of convexity in event-select score
+#   ^ high enough that a dramatically-cheaper-gamma near-ATM strike wins over the pricey visible one
+#     (META 565C→570C); convexity_score's own moneyness term keeps a far-OTM lottery from winning.
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 
