@@ -870,6 +870,45 @@ LEAN), **MSFT 490P** (no rotation-only exit — it later hit +63%), **NVDA 212.5
 that produced no alert — silent-suppression bug), **TSLA put surface** (multi-strike bearish campaign),
 plus the TSLA-call negative control (distributed decay must rank below the clean put fingerprints).
 
+### Strategy handoff (2026-08-30) — Priority 1 done; the rest scoped
+
+A full strategy-redesign handoff (5 case studies, a 17-state campaign machine, whole-surface package/
+greeks ranking, premium-value engine, flip workflows, intraday/overnight theses, replay acceptance
+tests). Much of it already exists: reversal cluster, EntryWindow, ValueState, InformationMass, package
+resolver, overnight_carry, remaining_convexity, morphology archetypes, decision ledger. The one clear
+GAP — and the through-line of every case study — was implemented:
+
+**Priority 1 — the ABSOLUTE ENTRY GATE** (`absolute_gate.py`, `ABS_GATE_ENABLED`). Rank tells the
+engine WHERE to look; it must NOT authorize a trade. Entry now requires, rank-independently,
+`attention_score ≥ ABS_MIN_SCORE (50)` AND directional `dominance ≥ ABS_MIN_DOMINANCE (0.60)` — a
+0.54–0.60 read is a **WEAK_LEAN**, not control. A failing signal is a **WATCH**, not an entry
+(`MISSED_DUE_TO_WEAK_ABSOLUTE_SIGNAL`). Calibrated to the case studies: passes the winners (NVDA
+94/0.73, TSLA 75) and blocks all three losers (META 42, MSFT 47/0.54, AAPL 49/0.57). Uses QUALIFIED
+dominance. Tests: `test_absolute_gate.py`.
+
+**Deliberately NOT built in this pass (honest — multi-cycle work, prioritized for next):**
+- **P2 whole-surface + package economics** — scan ATM±5 × calls/puts × neighboring expiries, group
+  prints into packages, synthetic-NBBO verticals, rank contracts by **gamma/vega per premium dollar**
+  and remaining convexity (META 565C-vs-570C/580C). Package resolver + surface profile exist; the
+  full greeks-per-premium ranking + synthetic NBBO do not.
+- **P3 premium-value / remaining-convexity gates** — mostly present (ValueState + late-by-drift + EV
+  convexity); the full intraday/historical premium-percentile-by-DTE engine is not.
+- **P4 cooling / reacceleration / re-entry states** — STABILIZING (cooling), recovered→ACTIVE
+  (reaccel) and EntryWindow re-arm exist; explicit REACCELERATION_WATCH + **auto re-entry after a full
+  exit** is not, and it **conflicts with the daily one-entry-per-side lock** — that policy tension
+  needs an explicit decision before building.
+- **P5 flip workflow** — ReversalCluster (EXIT_FLAT/EXIT_REVERSE) exists; the explicit
+  FLIP_PENDING → recompute-ATM → require-activation → enter-opposite sequence is partial.
+- **P6 intraday vs overnight thesis** — `overnight_carry` classifies; the INTRADAY-ends-at-close +
+  independent late-day OVERNIGHT confirmation is not wired.
+- **P1 activation half** — "require spot reclaim/break + premium higher-low + reacceleration; first
+  countertrend flow → COUNTERTREND_WATCH" is only partially present (FORMING spot-confirm).
+- **P7 replay acceptance tests** — TSLA/META/MSFT/NVDA/AAPL as causal no-lookahead tests: not yet.
+
+The engine's strength remains discovery; the absolute gate directly attacks its weakness (converting
+weak information into an expensive purchase). The remaining priorities are real work, not one-pass
+edits — recommend doing them one at a time with a replay after each.
+
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 
 Real 1-min bars, SHADOW fills — a directional check, not live P&L.

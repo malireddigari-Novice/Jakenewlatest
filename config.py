@@ -530,6 +530,14 @@ ENTRY_REARM_ENABLED   = os.getenv('ENTRY_REARM_ENABLED', 'true').lower() == 'tru
 # gates) rejects it. This supersedes the ACTIVE-only / re-arm eligibility when enabled.
 ENTRY_WINDOW_ENABLED  = os.getenv('ENTRY_WINDOW_ENABLED', 'true').lower() == 'true'
 ENTRY_WINDOW_MAX_MIN  = float(os.getenv('ENTRY_WINDOW_MAX_MIN', '60'))  # safety: an un-taken window expires after this
+
+# 2026-08-30 — ABSOLUTE ENTRY GATE (handoff Priority 1): rank tells us WHERE to look; absolute quality
+# authorizes the trade. A weak signal on a rank-#1 quiet-day ticker is a WATCH, not an entry. Blocks
+# the case-study losers (AAPL 49/0.57, MSFT 0.54, META 42) while passing the winners (NVDA 94/0.73,
+# TSLA 75). A 0.54-0.60 dominance is a WEAK_LEAN, not CONTROL. (Calibrate from replay, not just these.)
+ABS_GATE_ENABLED      = os.getenv('ABS_GATE_ENABLED', 'true').lower() == 'true'
+ABS_MIN_SCORE         = float(os.getenv('ABS_MIN_SCORE', '50'))     # attention score below this = no auto entry
+ABS_MIN_DOMINANCE     = float(os.getenv('ABS_MIN_DOMINANCE', '0.60'))  # directional dominance below this = LEAN, WATCH
 SHAKEOUT_RESID_TOL  = float(os.getenv('SHAKEOUT_RESID_TOL', '0.03')) # must be back within 3% of event price
 RESP_DELAYED_FLOOR  = float(os.getenv('RESP_DELAYED_FLOOR', '-0.10'))# hard floor: never accept > this far below event
 

@@ -26,6 +26,7 @@ from analysis import archetype
 from analysis import barshock
 from analysis import campaign
 from analysis import campaign_store
+from analysis import absolute_gate
 from analysis import contract_select
 from analysis import dataquality
 from analysis import decision_ledger
@@ -1228,6 +1229,19 @@ class AttentionEngine:
         # PremiumAtFirstInformationEvent vs current-poll comparison and convexity-since-open reads).
         if getattr(w, 'ew_opened_price', None) is None and best.get('mark'):
             w.ew_opened_price = best.get('mark')
+        # handoff Priority 1 — ABSOLUTE ENTRY GATE (rank-independent). A weak absolute signal is a WATCH,
+        # not a trade, even at rank #1 (AAPL 49/0.57, MSFT 0.54, META 42 all lost). Uses QUALIFIED
+        # dominance so a 0.54-0.60 read is a LEAN, not control. Applies in BOTH route and conjunctive modes.
+        qc = m.get('qualified_control') or {}
+        dom = ((qc.get('q_call_control') if side == 'CALL' else qc.get('q_put_control')) if qc
+               else (m.get('call_control') if side == 'CALL' else m.get('put_control')))
+        auth = absolute_gate.authorize(m.get('attention_score'), dom)
+        c['absolute_lean'] = auth['lean']
+        if config.ABS_GATE_ENABLED and not auth['authorized']:
+            logger.info("ENTRY-WATCH %s %s WEAK ABSOLUTE (%s) — %s; WATCH not entry (rank #%s is discovery, "
+                        "not authorization)", sym, side, auth['lean'], '; '.join(auth['reasons']),
+                        m.get('rank'))
+            return 'MISSED_DUE_TO_WEAK_ABSOLUTE_SIGNAL'
         # §10 archetype routes: when enabled, a candidate that clears the hard vetoes AND scores
         # enough total expected-asymmetry on its archetype route ENTERS — the soft conjunctive gates
         # below are bypassed (each is guarded by `not route_ok`). Microstructure vetoes still apply.
