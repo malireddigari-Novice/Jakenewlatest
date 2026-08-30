@@ -172,6 +172,26 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
     })
 
 
+def flip_card(*, ticker: str, from_side: str, to_side: str, events, strikes, reason: str,
+              now: datetime) -> None:
+    """🔄 P5 opposite-side FLIP hand-off — the ReversalCluster ACTIVATED and the incumbent exited; the
+    opposite side is now FLIP_PENDING and must re-activate through the normal gates before it opens."""
+    fields = [
+        {'name': 'Flip', 'value': f"**{from_side} → {to_side}**", 'inline': True},
+        {'name': 'Cluster events', 'value': f"{events if events is not None else '—'}", 'inline': True},
+        {'name': 'Opp strikes', 'value': (', '.join(f"{s:g}" for s in (strikes or [])) or '—'), 'inline': True},
+    ]
+    _post({
+        'title': f"🔄 FLIP PENDING  {ticker}  {from_side}→{to_side}",
+        'description': (f"{reason}\n**Not an order** — the opposite side must recompute its ATM/best-"
+                        f"convexity contract and pass the absolute + route + spot gates before it enters."),
+        'color': _BLUE,
+        'fields': fields,
+        'footer': {'text': "Jakenew · reversal flip hand-off (opposite entry is gated)"},
+        'timestamp': now.astimezone().isoformat(),
+    })
+
+
 def scale_card(pos: dict, *, sold: int, remaining: int, price: float, reason: str,
                pnl: float, mode: str, now: datetime) -> None:
     _post({

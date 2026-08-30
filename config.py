@@ -1194,6 +1194,48 @@ NEAR_MISS_REALERT_DELTA  = float(os.getenv('NEAR_MISS_REALERT_DELTA', '0.05'))  
 # exactly where candidates are lost (the audit's ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ENTRY_READY view).
 ATTRITION_REPORT_ENABLED = os.getenv('ATTRITION_REPORT_ENABLED', 'true').lower() == 'true'
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# HANDOFF P4 — COOLING / REACCELERATION / RE-ENTRY-AFTER-COOLING
+# A campaign that took profit or trailed off (a COOLING exit, not a failure/reversal/distribution/stop)
+# is not dead — attention can reaccelerate the SAME side later in the session. The daily one-ENTER-per-
+# side lock must not permanently forbid getting back in. Resolution of the daily-lock conflict: allow a
+# re-entry ONLY after a cooling exit AND on confirmed reacceleration (fresh abnormality + control re-
+# seized on the same side + still-favourable value + positive premium acceleration + spot confirming),
+# capped at REENTRY_MAX_PER_SLOT re-entries per side per session. Terminal exits (REVERSAL / DISTRIBUTION
+# / RISK_STOP / CONTROL_TRANSFER / THESIS_DEATH) are NOT re-eligible — re-buying a failed thesis is the
+# mistake this guards against. Until reacceleration confirms, a cooled slot sits in REACCELERATION_WATCH.
+REENTRY_ENABLED         = os.getenv('REENTRY_ENABLED', 'true').lower() == 'true'
+REENTRY_MAX_PER_SLOT    = int(os.getenv('REENTRY_MAX_PER_SLOT', '1'))     # re-entries allowed per side/session
+REENTRY_ELIGIBLE_CATEGORIES = set(
+    (os.getenv('REENTRY_ELIGIBLE_CATEGORIES', 'OBJECTIVE') or '').split(','))  # exit categories that COOL (re-eligible)
+REENTRY_MIN_CONTROL     = float(os.getenv('REENTRY_MIN_CONTROL', '0.60'))  # same-side control must re-seize to this
+REENTRY_MIN_ACCEL       = float(os.getenv('REENTRY_MIN_ACCEL', '0.0'))     # premium acceleration must exceed this
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HANDOFF P5 — OPPOSITE-SIDE FLIP WORKFLOW (FLIP_PENDING → recompute ATM → activate → enter opposite)
+# When the P3 ReversalCluster reaches REVERSAL_ACTIVATED and the outcome is EXIT_REVERSE, leaving the
+# incumbent is only half the flip. The opposite side must be entered as a FRESH campaign: recompute the
+# ATM / best-convexity contract for the new direction (contract_select already does this each poll) and
+# require it to pass every normal activation gate (absolute gate + route + spot confirm) before it opens
+# — the flip is never automatic off the incumbent's exit. FLIP_ANNOUNCE emits a Discord flip card so the
+# reversal→opposite hand-off is visible. This flag governs only the announcement/labelling; the opposite
+# entry always flows through the normal gated entry path (EXIT_REVERSE does NOT lock the opposite slot).
+FLIP_WORKFLOW_ENABLED   = os.getenv('FLIP_WORKFLOW_ENABLED', 'true').lower() == 'true'
+FLIP_ANNOUNCE           = os.getenv('FLIP_ANNOUNCE', 'true').lower() == 'true'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HANDOFF P6 — INTRADAY vs OVERNIGHT THESIS (0/1-DTE session-thesis classification)
+# A 0/1-DTE campaign carries an implicit horizon. INTRADAY theses (opening-drive / intraday momentum)
+# have no reason to survive the close and must be flat by EOD. An OVERNIGHT thesis (a durable directional
+# accumulation) may justify carrying the CAMPAIGN MEMORY (not the flattened position — paper flattens at
+# EOD regardless) forward, but only with independent LATE-DAY confirmation: same-side control held into
+# the close, no distribution, value retained. Absent that confirmation a late-day campaign is INTRADAY by
+# default. Classification is stamped on the campaign at EOD for carry_forward + next-open inheritance.
+SESSION_THESIS_ENABLED  = os.getenv('SESSION_THESIS_ENABLED', 'true').lower() == 'true'
+SESSION_THESIS_LATEDAY_MIN = float(os.getenv('SESSION_THESIS_LATEDAY_MIN', '60'))  # "late day" = last N min pre-close
+OVERNIGHT_MIN_CONTROL   = float(os.getenv('OVERNIGHT_MIN_CONTROL', '0.60'))  # late-day same-side control to carry
+OVERNIGHT_MAX_DIST_PROB = float(os.getenv('OVERNIGHT_MAX_DIST_PROB', '0.35'))  # distribution above this ⇒ INTRADAY
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 STATE_FILE = os.getenv('STATE_FILE', 'jakenew_state.json')
 LOG_FILE   = os.getenv('LOG_FILE', 'jakenew.log')

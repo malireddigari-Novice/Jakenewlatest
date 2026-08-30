@@ -886,28 +886,61 @@ engine WHERE to look; it must NOT authorize a trade. Entry now requires, rank-in
 94/0.73, TSLA 75) and blocks all three losers (META 42, MSFT 47/0.54, AAPL 49/0.57). Uses QUALIFIED
 dominance. Tests: `test_absolute_gate.py`.
 
-**Deliberately NOT built in this pass (honest — multi-cycle work, prioritized for next):**
-- **P2 whole-surface + package economics** — scan ATM±5 × calls/puts × neighboring expiries, group
-  prints into packages, synthetic-NBBO verticals, rank contracts by **gamma/vega per premium dollar**
-  and remaining convexity (META 565C-vs-570C/580C). Package resolver + surface profile exist; the
-  full greeks-per-premium ranking + synthetic NBBO do not.
-- **P3 premium-value / remaining-convexity gates** — mostly present (ValueState + late-by-drift + EV
-  convexity); the full intraday/historical premium-percentile-by-DTE engine is not.
-- **P4 cooling / reacceleration / re-entry states** — STABILIZING (cooling), recovered→ACTIVE
-  (reaccel) and EntryWindow re-arm exist; explicit REACCELERATION_WATCH + **auto re-entry after a full
-  exit** is not, and it **conflicts with the daily one-entry-per-side lock** — that policy tension
-  needs an explicit decision before building.
-- **P5 flip workflow** — ReversalCluster (EXIT_FLAT/EXIT_REVERSE) exists; the explicit
-  FLIP_PENDING → recompute-ATM → require-activation → enter-opposite sequence is partial.
-- **P6 intraday vs overnight thesis** — `overnight_carry` classifies; the INTRADAY-ends-at-close +
-  independent late-day OVERNIGHT confirmation is not wired.
-- **P1 activation half** — "require spot reclaim/break + premium higher-low + reacceleration; first
-  countertrend flow → COUNTERTREND_WATCH" is only partially present (FORMING spot-confirm).
+### Strategy handoff — P2 / P4 / P5 / P6 built (2026-08-30, ON for paper)
+
+Following the absolute gate, the next four priorities were implemented and enabled. All flag-gated (ON),
+each with standalone tests; suite 45/45.
+
+**P2 — remaining-convexity contract ranking** (`convexity.py`, `CONVEXITY_SELECT_ENABLED`). The engine
+kept buying the most VISIBLE strike (META 565C) while a nearby strike (570C/580C) offered far more
+**convexity per premium dollar** after resetting. Direction can be right while the expression is
+expensive. `contract_select` now scans the wider near-ATM surface (**ATM ± `CONVEXITY_WINDOW` = 5**) and
+adds a convexity term to the event-select score (`ES_W_CONVEXITY = 0.45`, score normalized to [0,1]):
+`convexity_score = 0.5·gamma-per-premium + 0.3·room-from-low + 0.2·moneyness-relevance`. Gamma-based
+(OPRA has no vega/theta — a documented follow-up); the moneyness term keeps a far-OTM lottery strike from
+winning. Tests: `test_convexity.py`.
+
+**P4 — re-entry after a COOLING exit** (`reentry.py`, `REENTRY_ENABLED`). The daily one-ENTER-per-side
+lock must not permanently forbid a legitimate return: a campaign that **took profit / trailed off** (a
+COOLING exit — category in `REENTRY_ELIGIBLE_CATEGORIES = {OBJECTIVE}`) can reaccelerate the SAME side
+later. Resolution of the daily-lock conflict: allow a re-entry **only after a cooling exit AND on
+confirmed reacceleration** — fresh abnormality + same-side control re-seized (`≥ REENTRY_MIN_CONTROL
+0.60`) + positive premium acceleration + value not extended/matured + spot confirming — capped at
+`REENTRY_MAX_PER_SLOT = 1` per side per session (the count is persistent across the intervening cooling
+exit). **Terminal exits (REVERSAL / RISK_STOP / DISTRIBUTION / CONTROL_TRANSFER / THESIS_DEATH) are never
+re-eligible** — re-buying a failed thesis is the exact mistake this guards against. Until reacceleration
+confirms, a cooled slot sits in **REACCELERATION_WATCH** (logged, not traded). Tests: `test_reentry.py`.
+
+**P5 — opposite-side flip workflow** (`reversal.flip_plan`, `FLIP_WORKFLOW_ENABLED`). When the P3
+ReversalCluster reaches REVERSAL_ACTIVATED and the outcome is `EXIT_REVERSE`, leaving the incumbent is
+only half the flip. The opposite side is now **FLIP_PENDING**: it must be entered as a FRESH campaign that
+recomputes its own ATM/best-convexity contract (contract_select does this each poll) and passes **every
+normal activation gate** (absolute + route + spot) before it opens — the flip is never automatic off the
+incumbent's exit. `EXIT_REVERSE` deliberately does NOT lock the opposite slot, so the normal gated entry
+path owns the opposite entry; a 🔄 Discord flip card (`FLIP_ANNOUNCE`) makes the hand-off visible. Tests:
+`test_flip.py`.
+
+**P6 — intraday vs overnight thesis** (`session_thesis.py`, `SESSION_THESIS_ENABLED`). A 0/1-DTE campaign
+carries an implicit horizon. At EOD each held short-DTE campaign is classified **INTRADAY** (spent at the
+bell — default) vs **OVERNIGHT** (carry the campaign MEMORY forward). OVERNIGHT requires independent
+late-day confirmation: same-side control held into the close (`≥ OVERNIGHT_MIN_CONTROL 0.60`), no
+distribution (`≤ OVERNIGHT_MAX_DIST_PROB 0.35`), value retained, spot confirming. We classify the
+THESIS, not the position (paper flattens either way); the label is stamped on the serialized campaign and
+`carry_forward` drops any campaign judged INTRADAY (`session_carry = False`). Tests: `test_session_thesis.py`.
+
+**Still deliberately NOT built (honest — remaining):**
+- **P2 full surface economics** — synthetic-NBBO verticals and **vega/theta**-per-premium ranking across
+  neighboring expiries (OPRA gives only delta/gamma/IV, so convexity is gamma-based today).
+- **P3 premium-percentile engine** — the full intraday/historical premium-percentile-by-DTE value model
+  (ValueState + late-by-drift + EV convexity are present).
+- **P1 activation half** — "require spot reclaim/break + premium higher-low; first countertrend flow →
+  COUNTERTREND_WATCH" is only partially present (FORMING spot-confirm + the reaccel gate reuse).
 - **P7 replay acceptance tests** — TSLA/META/MSFT/NVDA/AAPL as causal no-lookahead tests: not yet.
 
-The engine's strength remains discovery; the absolute gate directly attacks its weakness (converting
-weak information into an expensive purchase). The remaining priorities are real work, not one-pass
-edits — recommend doing them one at a time with a replay after each.
+The engine's strength remains discovery; the absolute gate (P1) attacks its core weakness (converting
+weak information into an expensive purchase), P2 fixes the *expression*, P4 stops it abandoning a campaign
+that legitimately reaccelerates, P5 makes reversals into disciplined re-activations, and P6 stops an
+intraday thesis leaking into next-open memory. Recommend a replay after live sessions accumulate.
 
 ### Phase-upgrade validation (2026-08-02, 4-week backtest 06/29–07/24)
 

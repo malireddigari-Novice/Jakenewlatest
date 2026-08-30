@@ -61,6 +61,11 @@ def carry_forward(campaigns, today) -> dict:
     for cid, c in (campaigns or {}).items():
         if c.get('state') in _TERMINAL:
             continue
+        # P6: a campaign the EOD session-thesis classifier judged INTRADAY (session_carry=False) does not
+        # carry — an intraday thesis has no reason to survive the close. Only set on held 0/1-DTE campaigns;
+        # absent the key, behaviour is unchanged.
+        if c.get('session_carry') is False:
+            continue
         if survives(c.get('expiry'), today):
             c = dict(c)
             c['overnight'] = True

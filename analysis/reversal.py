@@ -75,3 +75,21 @@ def outcome(cluster: dict, opp_qualifies: bool) -> str:
     if cluster.get('state') != 'REVERSAL_ACTIVATED':
         return 'HOLD'
     return 'EXIT_REVERSE' if opp_qualifies else 'EXIT_FLAT'
+
+
+def flip_plan(cluster: dict, opp_qualifies: bool) -> dict:
+    """P5 opposite-side flip hand-off. When outcome is EXIT_REVERSE the flip is only HALF done — the
+    incumbent leaves, but the opposite side must be entered as a FRESH campaign that recomputes its own
+    ATM/best-convexity contract and passes every normal activation gate (absolute + route + spot). This
+    returns a FLIP_PENDING descriptor for the announcement/log; it does NOT enter — the opposite entry
+    always flows through the normal gated entry path on this/subsequent polls."""
+    if outcome(cluster, opp_qualifies) != 'EXIT_REVERSE':
+        return {'flip': False}
+    return {'flip': True, 'state': 'FLIP_PENDING',
+            'ticker': cluster.get('ticker'),
+            'from_side': cluster.get('incumbent_side'),
+            'to_side': cluster.get('opposite_side'),
+            'events': cluster.get('events'), 'strikes': list(cluster.get('strikes') or []),
+            'reason': (f"reversal ACTIVATED on {cluster.get('ticker')}: "
+                       f"{cluster.get('incumbent_side')}→{cluster.get('opposite_side')}; opposite must "
+                       f"recompute ATM and re-activate through the normal gates before it opens")}

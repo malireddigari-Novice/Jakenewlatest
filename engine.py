@@ -54,6 +54,8 @@ from analysis import oi_confirm
 from analysis import replay
 from analysis import response as resp
 from analysis import reversal
+from analysis import reentry
+from analysis import session_thesis
 from analysis import strikes as strikesurf
 from analysis import value as valuemod
 from analysis.flow import FlowTracker
@@ -88,6 +90,8 @@ class AttentionEngine:
         self._expiry_class: dict = {}      # Phase 3/4: sym -> last expiry structural classification
         self._surf_center: dict = {}       # Phase 5: (sym,side) -> last weighted strike center (momentum)
         self._prev_scores: dict = {}       # §23: last poll's attention score per symbol (rotation velocity)
+        self._last_metrics: dict = {}      # P6: last poll's metric rows (EOD session-thesis classification)
+        self._last_cand: dict = {}         # P6: last poll's candidate reads (EOD session-thesis classification)
         self._expiry_rows: dict = {}       # #8: last multi-expiry rows per symbol (cross-expiry direction)
         self._dq: dict = {}                # #11-12: (sym) -> {contract: quote confidence 0..1}
         self._code_version, self._config_hash = self._provenance()   # item 17: ledger stamps
@@ -173,6 +177,7 @@ class AttentionEngine:
             self._surf_center.clear()
             self.state['entered_today'] = []       # NS: daily one-ENTER-per-side slots reset each session
             self.state['reversal'] = {}            # P3: reversal clusters are intraday — reset each session
+            self.state['cooled_slots'] = {}        # P4: slots that took a COOLING exit (re-entry eligible)
             # Addendum #1: inventory memory is CROSS-SESSION (a print's meaning depends on prior
             # inventory) — keep records whose expiry is still alive, prune the rest.
             if config.INVENTORY_ENABLED:
@@ -442,11 +447,30 @@ class AttentionEngine:
                 slot = f"{en['ticker']}|{en['side']}"
                 # NS daily lock: one ENTER per side per ticker per session. A used slot blocks any
                 # re-entry that side/ticker today (even after an exit) — everything else is management.
+                is_reentry = False
                 if config.DAILY_ENTRY_LOCK_ENABLED and slot in self.state.get('entered_today', []):
-                    logger.info("ENTRY-SUPPRESSED %s %s — daily %s slot already used this session "
-                                "(campaign management only, no re-entry)",
-                                en['ticker'], en['side'], en['side'])
-                    continue
+                    # P4: the daily lock is not permanent. A slot that took a COOLING exit (took profit /
+                    # trailed off) can be re-entered ONCE on confirmed reacceleration — terminal exits stay
+                    # locked. Absent confirmation the cooled slot sits in REACCELERATION_WATCH.
+                    cooled = (self.state.get('cooled_slots') or {}).get(slot)
+                    rc = reentry.can_reenter(
+                        cooled, (cooled or {}).get('category'),
+                        self._reaccel_ev(en['ticker'], en['side'], cand.get(en['ticker']),
+                                         metrics_by.get(en['ticker'])))
+                    if not rc['allow']:
+                        if rc.get('watch'):
+                            logger.info("REACCELERATION-WATCH %s %s — cooled slot eligible, reacceleration "
+                                        "not confirmed: %s (RESEARCH, no re-entry)",
+                                        en['ticker'], en['side'], ','.join(rc.get('detail') or []))
+                        else:
+                            logger.info("ENTRY-SUPPRESSED %s %s — daily %s slot already used this session "
+                                        "(%s; campaign management only)", en['ticker'], en['side'],
+                                        en['side'], rc['reason'])
+                        continue
+                    is_reentry = True
+                    logger.info("RE-ENTRY %s %s AUTHORIZED — %s after cooling via %s (used %d/%d)",
+                                en['ticker'], en['side'], rc['reason'], (cooled or {}).get('exit_reason'),
+                                (cooled or {}).get('count', 0), config.REENTRY_MAX_PER_SLOT)
                 # item 10: expiry selector (shadow) — recommend the expiry that best expresses the
                 # campaign before entering (execution still uses the nearest expiry when shadow).
                 if config.EXPIRY_SELECTOR_ENABLED and self._expiry_rows.get(en['ticker']):
@@ -464,8 +488,17 @@ class AttentionEngine:
                     self._attr['post_route_veto'][rej].add(en.get('wave_id'))
                 if rej is None:
                     self._attr['entered'].add(en.get('wave_id'))
-                    if config.DAILY_ENTRY_LOCK_ENABLED:
+                    if config.DAILY_ENTRY_LOCK_ENABLED and slot not in self.state.get('entered_today', []):
                         self.state.setdefault('entered_today', []).append(slot)
+                    if is_reentry:
+                        # P4: consume the re-entry — bump the persistent per-slot count (a fresh COOLING
+                        # exit is required before it re-arms, and the count survives across it so the
+                        # per-session cap REENTRY_MAX_PER_SLOT is honoured cumulatively).
+                        cs = (self.state.get('cooled_slots') or {}).get(slot) or {}
+                        cs['count'] = cs.get('count', 0) + 1
+                        (self.state.setdefault('cooled_slots', {}))[slot] = cs
+                        logger.info("RE-ENTRY %s consumed (%d/%d used this session)", slot,
+                                    cs['count'], config.REENTRY_MAX_PER_SLOT)
                 # item 17: Decision Ledger — record the outcome with EVERY hard veto (not just the first).
                 cc = cand.get(en['ticker'])
                 self._log_decision(now, en['ticker'], en['side'], metrics_by.get(en['ticker']), cc,
@@ -487,6 +520,10 @@ class AttentionEngine:
             self._archive_snapshot(ranked, metrics_by, cand, now)
         # §23: remember this poll's attention scores for next poll's rotation-velocity read.
         self._prev_scores = {r['symbol']: r['attention_score'] for r in ranked}
+        # P6: remember this poll's metric/candidate reads so the EOD session-thesis classifier can judge
+        # late-day control/distribution/value/spot for each held 0/1-DTE campaign.
+        self._last_metrics = metrics_by
+        self._last_cand = cand
         state.save(self.state)
 
     def _ingest_all(self, now: datetime) -> list:
@@ -1106,6 +1143,21 @@ class AttentionEngine:
                 rev.pop(key, None)
                 if out == 'EXIT_FLAT':      # invalidate but do NOT reverse — block the opposite slot today
                     self.state.setdefault('entered_today', []).append(opp_slot)
+                elif out == 'EXIT_REVERSE' and config.FLIP_WORKFLOW_ENABLED:
+                    # P5: the flip is only HALF done — the incumbent is out; the opposite side must now be
+                    # entered as a FRESH campaign that recomputes its own ATM/best-convexity contract and
+                    # passes every normal activation gate (absolute + route + spot) on this/later polls.
+                    # EXIT_REVERSE deliberately does NOT lock opp_slot, so the normal gated entry path owns
+                    # the opposite entry. We only announce/label the FLIP_PENDING hand-off here.
+                    plan = reversal.flip_plan(cl, opp_qualifies)
+                    logger.info("FLIP-PENDING %s → %s: %s", key, opp, plan.get('reason'))
+                    if config.FLIP_ANNOUNCE:
+                        try:
+                            notify.flip_card(ticker=sym, from_side=side, to_side=opp,
+                                             events=plan.get('events'), strikes=plan.get('strikes'),
+                                             reason=plan.get('reason'), now=now)
+                        except Exception:
+                            logger.warning("flip card failed (non-fatal)", exc_info=True)
 
     # ── entries (Route: new ACTIVE wave, §16 contract gates) ──────────────────────
 
@@ -1218,6 +1270,23 @@ class AttentionEngine:
         logger.info("NEAR-MISS-WATCH %s %s %s route=%s score=%.3f/%.3f value=%s qctrl=%.2f drag=[%s] "
                     "— RESEARCH ONLY, no entry", sym, side, best.get('strike'), route, dec['score'],
                     config.ENTRY_ROUTE_MIN_SCORE, vs, max(qcs, ctrl or 0.0), drag)
+
+    def _reaccel_ev(self, sym, side, c, m) -> dict:
+        """P4: compact reacceleration read for reentry.reaccel_confirmed — mirrors _open_wave's absolute
+        gate (qualified dominance), plus fresh abnormality / same-side control / value / spot confirm."""
+        c = c or {}
+        m = m or {}
+        qc = m.get('qualified_control') or {}
+        dom = ((qc.get('q_call_control') if side == 'CALL' else qc.get('q_put_control')) if qc
+               else (m.get('call_control') if side == 'CALL' else m.get('put_control')))
+        auth = absolute_gate.authorize(m.get('attention_score'), dom)
+        sc = side.lower()
+        return {'authorized': auth['authorized'],
+                'abnormal': bool((c.get('barshock') or {}).get('significant')),
+                'control': dom or 0.0,
+                'accel': m.get(sc + '_acceleration', 0.0) or 0.0,
+                'value_state': (c.get('value') or {}).get('value_state'),
+                'spot_confirms': bool(c.get('spot_confirms'))}
 
     def _open_wave(self, en, cand, ranked, market_mass, now) -> None:
         sym, side, w, m = en['ticker'], en['side'], en['wave'], en['metric']
@@ -1719,6 +1788,17 @@ class AttentionEngine:
                 # Addendum #21 — durable end taxonomy (death vs completion) for historical memory.
                 if config.CAMPAIGN_TAXONOMY_ENABLED:
                     camps[cid]['end_taxonomy'] = campaign_store.classify_end(reason, pnl=pnl, carried=False)
+        # P4: a COOLING exit (took profit / trailed off) leaves the slot re-entry-eligible — remember it
+        # so the daily lock can be reopened on confirmed reacceleration. Terminal exits (reversal / risk /
+        # distribution / control-transfer / thesis-death) and EOD are NOT recorded → never re-eligible.
+        if config.REENTRY_ENABLED and reason != 'EOD_FLATTEN' and reentry.is_cooling_exit(category):
+            slot = f"{pos['symbol']}|{pos['side']}"
+            cooled = self.state.setdefault('cooled_slots', {})
+            prev = cooled.get(slot) or {}
+            cooled[slot] = {'category': category, 'count': prev.get('count', 0),
+                            'exit_price': mark, 'exit_reason': reason, 'exit_at': now.isoformat()}
+            logger.info("REENTRY-ARM %s cooled via %s (%s) — re-entry eligible on confirmed reacceleration "
+                        "(used %d/%d)", slot, reason, category, prev.get('count', 0), config.REENTRY_MAX_PER_SLOT)
         self._sheet(lambda: self.sheets.log_trade_exit(pos, price=mark, reason=reason, pnl=pnl,
                                                        mode=mode, category=category, hold_s=hold_s,
                                                        mfe=mfe, mae=mae))
@@ -1770,6 +1850,12 @@ class AttentionEngine:
         if self.state.get('eod_done') == now.date().isoformat():
             return
         self.state['eod_done'] = now.date().isoformat()
+        # P6: classify each held 0/1-DTE campaign's session thesis (INTRADAY vs OVERNIGHT) BEFORE we
+        # flatten, and stamp it on the campaign record so carry_forward / next-open inheritance treats an
+        # overnight thesis as inherited context and an intraday one as spent. We classify the THESIS; the
+        # position is flattened either way (paper). At EOD we are late-day by definition (minutes_to_close=0).
+        if config.SESSION_THESIS_ENABLED:
+            self._classify_session_theses(now)
         for pos in list(self._held()):
             mark = self._current_mark(pos) or pos['entry_price']
             self._close(pos, mark, now, reason='EOD_FLATTEN')
@@ -1777,6 +1863,36 @@ class AttentionEngine:
             self.exec.close_all_positions()
         self._attrition_report()
         state.save(self.state)
+
+    def _classify_session_theses(self, now) -> None:
+        """P6: at EOD, label each held 0/1-DTE campaign INTRADAY vs OVERNIGHT from the last poll's late-day
+        read (control held / distribution / value / spot) and stamp it on the serialized campaign so
+        carry_forward inherits an overnight thesis and discards an intraday one. Never blocks the flatten."""
+        camps = self.state.get('campaigns', {})
+        today = today_cst()
+        for pos in list(self._held()):
+            sym, side = pos['symbol'], pos['side']
+            exp = self._expiry.get(sym)
+            dte = (exp - today).days if exp else None
+            m = (self._last_metrics or {}).get(sym) or {}
+            c = (self._last_cand or {}).get(sym) or {}
+            qc = m.get('qualified_control') or {}
+            dom = ((qc.get('q_call_control') if side == 'CALL' else qc.get('q_put_control')) if qc
+                   else (m.get('call_control') if side == 'CALL' else m.get('put_control')))
+            res = session_thesis.classify({
+                'minutes_to_close': 0, 'dte': dte, 'control': dom or 0.0,
+                'dist_prob': c.get('dist_prob') or 0.0,
+                'value_state': (c.get('value') or {}).get('value_state'),
+                'spot_confirms': bool(c.get('spot_confirms'))})
+            logger.info("SESSION-THESIS %s %s dte=%s → %s (carry=%s) [%s]", sym, side, dte,
+                        res['thesis'], res['carry'], ','.join(res['reasons']))
+            try:
+                cid = campaign_store.campaign_id(sym, side, pos['opened_at'][:10], pos['strike'])
+            except Exception:
+                cid = None
+            if cid in camps:
+                camps[cid]['session_thesis'] = res['thesis']
+                camps[cid]['session_carry'] = res['carry']
 
     def _attrition_report(self) -> None:
         """Audit item 3/6: EOD entry-funnel + hard-veto + near-miss breakdown, so we can see exactly
