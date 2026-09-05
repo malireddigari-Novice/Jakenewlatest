@@ -186,6 +186,20 @@ def campaign_end(reason: str) -> str:
     return _END.get(reason, reason)
 
 
+def trail_should_exit(pnl, peak, tp1_done, *, arm_pct, giveback_pct, require_tp1) -> bool:
+    """Does the premium giveback trail fire? The trail exists to protect BANKED gains, so it owns
+    the position only after TP1 is banked (require_tp1). Before TP1 an ordinary sub-TP1 0DTE
+    retracement is quote noise — gamma/theta/IV/spread churn — not campaign death; letting the trail
+    liquidate there is the 08/28 AMZN 260C regression (peaked ~+56% below the +60% TP1, gave back 35%
+    of a sub-TP1 peak, exited near flat, then the campaign produced the major move). Pre-TP1 the
+    position is instead held by the hard stop / reversal / distribution / hold engine / EOD. When
+    require_tp1 is False the legacy pre-TP1 trail is restored. `peak`/`pnl` are fractions of entry
+    (0.56 == +56%). Pure — no config/engine state — so the rule is unit-testable in isolation."""
+    if require_tp1 and not tp1_done:
+        return False
+    return peak >= arm_pct and pnl <= peak - giveback_pct
+
+
 # Exit taxonomy (spec §33-36, §40) — group each exit reason into WHY the campaign was left, so exit
 # quality can be analysed by cause (objective vs thesis-death vs risk vs distribution).
 _EXIT_CATEGORY = {

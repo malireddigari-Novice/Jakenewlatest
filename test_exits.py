@@ -35,6 +35,28 @@ ck("RUNNER_ENABLED is a boolean flag", isinstance(config.RUNNER_ENABLED, bool))
 ck("runner trail is wider than the base trail (let winners run)",
    config.RUNNER_TRAIL_GIVEBACK_PCT > config.TRAIL_GIVEBACK_PCT)
 
+print("── pre-TP1 trail ownership (AMZN 08/28 260C regression) ──")
+ARM, GB = config.TRAIL_ARM_PCT, config.TRAIL_GIVEBACK_PCT   # defaults: arm +40%, give back 35%
+# AMZN 260C: peaked ~+56% (below the +60% TP1 → tp1_done False), then a normal high-gamma
+# retracement dragged pnl back toward flat, tripping the +40%-armed 35%-giveback trail. With
+# TRAIL_REQUIRE_TP1 (the fix) the trail must NOT own a pre-TP1 position — the campaign then went +700%.
+amzn_peak, amzn_pnl = 0.56, 0.05
+ck("legacy pre-TP1 trail WOULD have exited AMZN (documents the old bug)",
+   campaign.trail_should_exit(amzn_pnl, amzn_peak, False, arm_pct=ARM, giveback_pct=GB, require_tp1=False))
+ck("fix: pre-TP1 trail does NOT fire when require_tp1 (AMZN held)",
+   not campaign.trail_should_exit(amzn_pnl, amzn_peak, False, arm_pct=ARM, giveback_pct=GB, require_tp1=True))
+# Default runtime must ship with the fix on.
+ck("TRAIL_REQUIRE_TP1 defaults ON", config.TRAIL_REQUIRE_TP1 is True)
+# After TP1 the trail SHOULD protect banked gains — the fix must not disable the post-TP1 trail.
+ck("post-TP1: trail still protects banked gains (giveback breached)",
+   campaign.trail_should_exit(0.10, 0.60, True, arm_pct=ARM, giveback_pct=GB, require_tp1=True))
+# And a healthy runner still inside its giveback band is never trailed out.
+ck("post-TP1: no exit while inside the giveback band",
+   not campaign.trail_should_exit(0.55, 0.60, True, arm_pct=ARM, giveback_pct=GB, require_tp1=True))
+# A pre-TP1 position that never armed the trail (peak below arm) is a no-op either way.
+ck("pre-TP1 below arm threshold: no exit regardless of flag",
+   not campaign.trail_should_exit(0.10, 0.30, False, arm_pct=ARM, giveback_pct=GB, require_tp1=True))
+
 print("── rejection taxonomy (§19) ──")
 ck("price-extension miss is a model miss", campaign.reject_is_model_miss('MISSED_DUE_TO_PRICE_EXTENSION'))
 ck("single-strike-notional miss is a model miss",

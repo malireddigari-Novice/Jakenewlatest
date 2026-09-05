@@ -1097,7 +1097,15 @@ class AttentionEngine:
                 self._close(pos, mark, now, reason='STRUCTURAL_TP2', board=board,
                             metric=metrics_by.get(pos['symbol']))
                 continue
-            if peak >= config.TRAIL_ARM_PCT and pnl <= peak - config.TRAIL_GIVEBACK_PCT:
+            # Premium giveback trail. It protects BANKED gains — so it must not own the position
+            # before TP1 (an ordinary sub-TP1 0DTE retracement is quote noise, not campaign death;
+            # the AMZN 08/28 260C regression). Pre-TP1 the position is held by the hard stop /
+            # reversal / distribution / hold engine / EOD instead. TRAIL_REQUIRE_TP1=false restores
+            # the legacy pre-TP1 trail.
+            if campaign.trail_should_exit(pnl, peak, pos.get('tp1_done'),
+                                          arm_pct=config.TRAIL_ARM_PCT,
+                                          giveback_pct=config.TRAIL_GIVEBACK_PCT,
+                                          require_tp1=config.TRAIL_REQUIRE_TP1):
                 self._close(pos, mark, now, reason='TRAIL_GIVEBACK', board=board,
                             metric=metrics_by.get(pos['symbol']))
 

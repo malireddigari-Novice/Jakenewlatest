@@ -356,6 +356,16 @@ protection. **No new entries in the final 15 minutes** before the flatten.
 **A — Objective met (profit):** +60% → sell half · +150% → sell the rest · trailing giveback
 (once up +40%, give back 35% from the peak → out).
 
+> **The giveback trail does NOT own a position before TP1** (`TRAIL_REQUIRE_TP1`, default on).
+> A 0DTE contract routinely gives back 35% of a *sub-TP1* peak on an ordinary high-gamma retracement
+> and then resumes — that is quote noise (gamma/theta/IV/spread), not campaign death. Arming the trail
+> at +40% (below the +60% TP1) liquidated the **08/28 AMZN 260C near flat** after it peaked ~+56%,
+> minutes before the campaign produced the major move. So **before TP1 there is no premium trail**: the
+> position is held only by the hard stop, the reversal manager, distribution, the hold engine and EOD —
+> thesis exits, not a premium stop. **After** TP1 is banked, the giveback trail resumes protecting the
+> realised gains as before. Set `TRAIL_REQUIRE_TP1=false` to restore the legacy pre-TP1 trail. The rule
+> is the pure `campaign.trail_should_exit(...)` (unit-tested in `test_exits.py`, AMZN case).
+
 **A′ — WATCH/REDUCE (deterioration, not yet death):** if the **distribution probability** rises
 past its reduce threshold *and* the premium has given back ≥15% from its peak while the wave thesis
 is still alive, the engine **trims once** to de-risk (distinct from the profit scale-out) and lets
@@ -1167,6 +1177,8 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `FORMING_MIN_POSTERIOR` / `FORMING_MAX_DIST_PROB` / `FORMING_MIN_EV` | 0.66 / 0.45 / 0.05 | stricter early (FORMING) entry |
 | `REQUIRE_IV_CONFIRM` / `DELTA_ADJ_NOTIONAL_MIN` | false / 0 | optional IV-firmness / directional-size gates (off) |
 | `TAKE_PROFIT_1/2_PCT` | +60% / +150% | scale / full profit targets |
+| `TRAIL_ARM_PCT` / `TRAIL_GIVEBACK_PCT` | 0.40 / 0.35 | giveback trail: arm past +40%, exit on 35% peak giveback |
+| `TRAIL_REQUIRE_TP1` | true | trail owns the position only **after** TP1 (no pre-TP1 premium stop; AMZN 08/28 fix) |
 | `STOP_LOSS_PCT` | 0.40 | hard stop-loss (risk backstop) |
 | `ENTRY_CUTOFF_BUFFER_MIN` | 15 | no new entries within this many min of the flatten |
 | `FAST_POLL_SECONDS` | 5 | loop cadence |

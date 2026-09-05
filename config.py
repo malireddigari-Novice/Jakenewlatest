@@ -85,6 +85,14 @@ TAKE_PROFIT_1_PCT   = float(os.getenv('TAKE_PROFIT_1_PCT', '0.60'))   # +60%  �
 TAKE_PROFIT_2_PCT   = float(os.getenv('TAKE_PROFIT_2_PCT', '1.50'))   # +150% → sell rest
 TRAIL_GIVEBACK_PCT  = float(os.getenv('TRAIL_GIVEBACK_PCT', '0.35'))  # give back 35% of peak → out
 TRAIL_ARM_PCT       = float(os.getenv('TRAIL_ARM_PCT', '0.40'))       # trail only arms past +40%
+# The premium giveback trail must NOT own a position before TP1 is banked. A 0DTE contract routinely
+# gives back 35% of a sub-TP1 peak on an ordinary high-gamma retracement, then resumes — that is not
+# campaign death, it is quote noise. Arming the trail at +40% (below TP1 at +60%) liquidated the
+# 08/28 AMZN 260C near flat after it peaked ~+56%, minutes before the campaign produced +700%.
+# With this True (default), before TP1 the position is held by the hard stop, the reversal manager,
+# distribution, the hold engine and EOD — thesis exits, not a premium trail. Set False to restore the
+# legacy pre-TP1 trail. See HOW_IT_WORKS.md "Structural exit ladder" and test_exits.py (AMZN case).
+TRAIL_REQUIRE_TP1   = os.getenv('TRAIL_REQUIRE_TP1', 'true').lower() == 'true'
 # Hard stop-loss — a risk backstop that caps the per-trade tail. Fires regardless of min-hold
 # or thesis state (risk management overrides everything but a completed fill). 0 disables it.
 STOP_LOSS_PCT       = float(os.getenv('STOP_LOSS_PCT', '0.40'))       # close at -40%
