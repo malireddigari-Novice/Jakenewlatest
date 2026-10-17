@@ -112,3 +112,16 @@ def assess(evidence: dict) -> dict:
                           else top if non_directional_lead else None),
             'reason': f'{top} p={top_p:.2f} (directional={dir_p:.2f})'
                       + (f' — non-directional lead {top}' if non_directional_lead else '')}
+
+
+def best_alternative(hyp: dict):
+    """(name, p) of the strongest NON-directional reading — the alternative every directional
+    interpretation must carry (flow handoff §6: opening theses keep their closing/package/hedge
+    alternatives). None when no hypothesis distribution exists."""
+    probs = (hyp or {}).get('probs') or {}
+    alts = {h: p for h, p in probs.items() if h not in ('FRESH_DIRECTIONAL', 'UNKNOWN')}
+    if not alts:
+        return None
+    h = max(alts, key=alts.get)
+    return h, alts[h]
+

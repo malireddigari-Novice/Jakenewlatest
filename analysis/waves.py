@@ -229,7 +229,7 @@ class WaveEngine:
                     w.active_evals += 1
                     if w.active_evals >= tim['active_confirm']:
                         w.go_active(now)
-                        log.append(f"{w.wave_id} FORMING->ACTIVE confirmed "
+                        log.append(f"{w.wave_id} FORMING->ACTIVE sustained "
                                    f"({w.active_evals}/{tim['active_confirm']})")
                 else:
                     w.active_evals = 0

@@ -19,14 +19,16 @@ Three related reads that all treat *expiry* as an economic variable, not a fixed
 import config
 
 
-def late_day_0dte_value(dte, minutes_since_open, *, strength, activation, remaining_convexity) -> dict:
+def late_day_0dte_value(dte, minutes_since_open, *, strength, activation, remaining_convexity,
+                        session_minutes: float = 390.0) -> dict:
     """LateDay0DTEValue with a time-of-day theta ramp. Only 0DTE (dte<=0) is penalised.
-    strength / activation / remaining_convexity are 0..1. Returns {value, theta_risk, is_0dte}."""
+    strength / activation / remaining_convexity are 0..1. session_minutes is 210 on an early-close day
+    (the ramp must reach 1 at the ACTUAL close). Returns {value, theta_risk, is_0dte}."""
     is_0dte = (dte is not None and dte <= 0)
     if not is_0dte:
         base = max(0.0, min(1.0, strength)) * max(0.0, min(1.0, activation)) * max(0.0, min(1.0, remaining_convexity))
         return {'value': round(base, 3), 'theta_risk': 0.0, 'is_0dte': False}
-    span = max(1.0, (390.0 - config.LATE0DTE_START_MIN))          # open→close minutes past the ramp start
+    span = max(1.0, (session_minutes - config.LATE0DTE_START_MIN))  # open→close minutes past the ramp start
     theta_risk = max(0.0, min(1.0, (minutes_since_open - config.LATE0DTE_START_MIN) / span))
     core = max(0.0, min(1.0, strength)) * max(0.0, min(1.0, activation)) * max(0.0, min(1.0, remaining_convexity))
     value = core - config.LATE0DTE_THETA_WEIGHT * theta_risk

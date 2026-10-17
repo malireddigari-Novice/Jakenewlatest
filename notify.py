@@ -24,9 +24,11 @@ import time
 from datetime import datetime
 from typing import Optional
 
+import pytz
 import requests
 
 import config
+from analysis import channels
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ _REASON_TEXT = {
     'STRUCTURAL_TP1':        "Banked the first slice at the structural target.",
     'STRUCTURAL_TP2':        "Full structural objective reached — position closed.",
     'TRAIL_GIVEBACK':        "Trailing stop — gave back too much of the peak gain.",
-    'ATTENTION_ROTATED_AWAY': "Institutional attention rotated away{to_leader}.",
+    'ATTENTION_ROTATED_AWAY': "Options-flow attention rotated away{to_leader}.",
     'CONTROL_FLIPPED':       "Within-name call/put control flipped against the position.",
     'EOD_FLATTEN':           "End-of-day flatten — 0DTE convexity is never carried overnight.",
     # base wave exits
@@ -53,15 +55,27 @@ _REASON_TEXT = {
     'DISTRIBUTION_EXIT':     "Closed the runner — coherent distribution / exit flow.",
     'RUNNER_TRAIL':          "Runner trailing stop protected the extended run.",
     # follow-up §20 campaign-confidence exits
-    'VERIFIED_DISTRIBUTION':               "Verified distribution — inventory being sold.",
+    'SUSTAINED_DISTRIBUTION':               "Sustained distribution pattern — heavy volume while premium fails (inferred, not verified selling).",
     'PERSISTENT_CONTROL_TRANSFER':         "Control persistently transferred to the other side.",
-    'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED':    "A coherent opposite-side campaign took over.",
+    'OPPOSITE_SIDE_CAMPAIGN_SUSTAINED':    "A sustained opposite-side flow campaign took over.",
     'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE': "Rotation AND the current campaign deteriorated{to_leader}.",
     'PREMIUM_STRUCTURE_FAILURE':           "Premium structure broke — higher lows failed.",
     'RESILIENCE_FAILURE':                  "Campaign resilience collapsed — no recovery.",
     'TRUE_MULTI_VARIABLE_EXHAUSTION':      "Genuine multi-variable exhaustion (not just cooling).",
 }
 
+
+_NY = pytz.timezone('America/New_York')
+
+# Non-directional hypothesis → the plain-English alternative shown on a card.
+_ALT_TEXT = {
+    'CLOSING_PROFITABLE': 'closing a profitable position',
+    'CLOSING_LOSING':     'closing a losing position',
+    'OVERWRITE':          'premium selling / overwriting',
+    'ROLL':               'a roll of an existing position',
+    'SPREAD_LEG':         'one leg of a spread (net side unknown)',
+    'HEDGE':              'a hedge / volatility demand',
+}
 
 RESEARCH_FOOTER = "For research only. Not investment advice. Verify fills and manage your own risk."
 
@@ -261,13 +275,29 @@ def _mode_tag(mode: str) -> str:
 
 # ── cards ─────────────────────────────────────────────────────────────────────
 
+def _dte_line(expiry, now) -> str:
+    dte = channels.dte_ny(expiry, now)
+    return (f"{now.astimezone(_NY):%H:%M:%S} ET · DTE {dte if dte is not None else 'UNKNOWN'} · "
+            f"`{channels.dte_bucket(dte)}`")
+
+
+def _alt_text(alternative) -> str:
+    if not alternative:
+        return "UNKNOWN (no hypothesis read)"
+    name, p = alternative
+    return f"{_ALT_TEXT.get(name, name)} (p={p:.2f})"
+
+
 def entry_card(board: dict, *, symbol: str, side: str, strike: float, expiry: str,
                qty: int, price: float, row: dict, spot: Optional[float], mode: str,
-               now: datetime) -> None:
-    """The reason we're in: attention leader + control + contract + plan + the full board."""
-    direction = 'BULLISH' if side == 'CALL' else 'BEARISH'
-    thesis = (f"**{symbol}** owns **{100*row['share']:.0f}%** of the Mag-7 fresh-premium pool "
-              f"and **{side}s control it** ({direction.lower()}). Buying the convexity.")
+               now: datetime, alternative=None, catalyst: str = None) -> None:
+    """The engine's OWN paper order (a real submitted order, so green/red is allowed): attention leader +
+    side lead + contract + plan + the full board. The flow read stays a conditional interpretation with
+    its best alternative — the tape never shows who opened what."""
+    direction = 'bullish' if side == 'CALL' else 'bearish'
+    thesis = (f"**{symbol}** carries **{100*row['share']:.0f}%** of the Mag-7 fresh-premium pool and "
+              f"**{side}-side premium leads** — read as {direction} flow *if* it is fresh directional "
+              f"buying. Best alternative: {_alt_text(alternative)}. Buying the convexity (paper).")
     spend = qty * price * 100
     fields = [
         {'name': 'Attention',
@@ -282,7 +312,8 @@ def entry_card(board: dict, *, symbol: str, side: str, strike: float, expiry: st
                   (f"\nspot ${spot:.2f}" if spot else ""), 'inline': True},
         {'name': 'Entry',
          'value': f"${price:.2f} × {qty}  =  ${spend:,.0f}", 'inline': True},
-        {'name': '​', 'value': '​', 'inline': True},
+        {'name': 'Observed', 'value': _dte_line(expiry, now), 'inline': True},
+        {'name': 'Catalyst', 'value': catalyst or 'Catalyst: no verified calendar loaded.', 'inline': False},
         {'name': 'Exit plan', 'value': _exit_plan_text(), 'inline': False},
         {'name': 'Attention board', 'value': _board_table(board, highlight=symbol), 'inline': False},
     ]
@@ -298,7 +329,8 @@ def entry_card(board: dict, *, symbol: str, side: str, strike: float, expiry: st
 
 def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, threshold: float,
                    shortfall, value_state, qual_control, dist_prob, archetype, info_rank,
-                   acceptance, top_drag: str, now: datetime) -> None:
+                   acceptance, top_drag: str, now: datetime, expiry=None, alternative=None,
+                   next_check: str = None, catalyst: str = None) -> None:
     """🟡 RESEARCH-ONLY near-miss WATCH — a genuinely-scored candidate just under the execution
     boundary. Explicitly NOT a trade; collects live evidence on whether 0.50-0.54 events are tradeable."""
     fields = [
@@ -310,7 +342,12 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
         {'name': 'Distribution', 'value': f"{(dist_prob or 0):.2f}", 'inline': True},
         {'name': 'Acceptance', 'value': f"{acceptance or '—'}", 'inline': True},
         {'name': 'Info-mass rank', 'value': f"#{info_rank}" if info_rank else '—', 'inline': True},
-        {'name': '​', 'value': '​', 'inline': True},
+        {'name': 'Observed', 'value': _dte_line(expiry, now), 'inline': True},
+        {'name': 'Interpretation',
+         'value': (f"Working hypothesis: fresh {'bullish' if side == 'CALL' else 'bearish'} {side.lower()} flow. "
+                   f"Best alternative: {_alt_text(alternative)}."), 'inline': False},
+        {'name': 'Next check', 'value': next_check or 'whether the route score clears the boundary', 'inline': False},
+        {'name': 'Catalyst', 'value': catalyst or 'Catalyst: no verified calendar loaded.', 'inline': False},
     ]
     _post({
         'title': f"🟡 NEAR-MISS WATCH  {sym} {side} {strike:g}" if strike is not None else f"🟡 NEAR-MISS WATCH  {sym} {side}",
@@ -321,6 +358,20 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
         'footer': {'text': f"Jakenew · near-miss research alert (not an entry) · {RESEARCH_FOOTER}"},
         'timestamp': now.astimezone().isoformat(),
     })
+
+
+def coverage_card(inc: dict, *, recovery_s: float, now: datetime) -> None:
+    """🔵 feed-degradation notice — a ticker's data feed had a gap; its inference is paused (context only)
+    until the fresh-flow windows refill. Visible so a quiet ticker is not mistaken for a quiet tape."""
+    _post({
+        'title': f"🔵 FEED GAP  {inc['symbol']}  {inc['gap_s']:.0f}s",
+        'description': (f"No usable option data for **{inc['gap_s']:.0f}s**. New entries on "
+                        f"{inc['symbol']} are paused for {recovery_s:.0f}s while flow windows refill — "
+                        f"reads across the gap are **context only**."),
+        'color': _BLUE,
+        'footer': {'text': f"Jakenew · coverage notice · {RESEARCH_FOOTER}"},
+        'timestamp': now.astimezone().isoformat(),
+    }, signal_id=f"coverage|{inc['symbol']}|{inc['gap_start']}")
 
 
 def flip_card(*, ticker: str, from_side: str, to_side: str, events, strikes, reason: str,

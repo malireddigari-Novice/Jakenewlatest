@@ -1271,3 +1271,64 @@ dropped them. Now every card is written PENDING to a sqlite outbox (`NOTIFY_OUTB
   post can still produce one duplicate on retry. Everything else is retried without loss or duplication.
 - Tests: `test_notify_outbox.py` (stubbed HTTP: timeout, 429, 5xx, 404, dedupe, mention suppression).
 
+
+## Handoff alignment, round 2 (2026-10-17) — everything else that maps onto Jakenew
+
+Decision: Jakenew **keeps placing its own paper orders** (those are real submitted orders, so their
+cards stay green/red). Everything else follows the flow handoff's evidence rules. Ruleset stamp:
+`analysis/channels.py` `RULESET_VERSION = handoff-2026-10-17`, `SCHEMA_VERSION = jakenew-record-v2`.
+
+**Exchange calendar (`data/exchange_calendar.py`, used by `data/market_utils.py`, `main.py`).** Rule-based
+NYSE holidays (observed-day shifts, Good Friday, Juneteenth 2022+) and 1:00 pm ET early closes (Jul 3
+when Jul 4 is Tue–Fri, day after Thanksgiving, Dec 24). Previously a holiday counted as a normal open day,
+and on a half day the EOD flatten still fired at 14:55 CT, *after* the 12:00 CT close, so a 0DTE would not
+be flattened. Now: holiday → `main.py` exits at launch; half day → close 12:00 CT, EOD flatten 11:55 CT,
+entry cutoff 11:40 CT, and the late-0DTE theta ramp spans the real 210-minute session. One-off closures:
+`EXTRA_MARKET_HOLIDAYS`. Next half days: **2026-11-27** and **2026-12-24**. Tests: `test_calendar.py`.
+
+**Feed coverage (`analysis/coverage.py`, `COVERAGE_*`).** Fresh flow is `cum(b) − cum(a)`; after a feed
+gap the next window lumps the whole gap into one read, which looks like a fake shock. A ticker with no usable
+ingest for > `COVERAGE_GAP_S` (30s) has a coverage incident; once data resumes it stays DEGRADED for
+`COVERAGE_RECOVERY_S` (180s) and `_open_wave` rejects new entries with `COVERAGE_DEGRADED`. Exits and
+management still run. Gaps ≥ `COVERAGE_NOTIFY_MIN_GAP_S` (60s) post a 🔵 FEED GAP notice. Backtest uses a
+150s gap threshold for its 1-minute cadence.
+
+**Missing history ≠ zero (`analysis/mass.py`).** The per-ticker abnormality z is 0 on an empty baseline.
+That means "no evidence", not "measured normal", so the output now carries `baseline_n` and
+`baseline_quality` (UNSEEDED until `MASS_BASELINE_MIN_SAMPLES`), and both go to the ledger.
+A z of 0 never passes an abnormality gate, so there is no extra veto.
+
+**DTE channels + provenance (`analysis/channels.py`).** Every ledger record and card carries the NY-calendar
+DTE and its channel: `zero_dte` 0, `weekly` 1–7, `short_term` 8–30, `swing` 31–99, `long_dated` 100+
+(multi-expiry → earliest live expiry). Ledger records also carry `schema_version`, `ruleset_version`,
+`ny_session`, `coverage`, `catalyst_status`, `catalyst_event_mismatch`, `baseline_quality`,
+`package_ratio` and `package_association`.
+
+**Verified catalysts (`analysis/catalyst.py`, `CATALYST_FILE` = `catalysts.json`, optional).** An event
+counts only if its source was published at or before the signal and the event is still in the future. A row
+missing source URL, publication time, observed time or BMO/AMC timing is UNVERIFIED, and the card says so.
+An expiry before the event (or on an AMC event day) is an EVENT_MISMATCH. With no file, cards say "no
+verified calendar loaded". `REGIME_EVENT_DATES` still only scales caution. Catalysts are context only, not a gate.
+
+**Package candidates (`analysis/packages.py`, `pkg-snapshot-v2`).** Leg sizes are reported as a reduced
+whole-number ratio after rounding to `PKG_RATIO_LOT` (4,000 vs 7,000 → `4:7`, never 1:1). The co-print
+partner is recorded. Association is `TIME_SIZE_ONLY` (the weakest grade: the snapshot feed has no condition
+codes, venue or ms timestamps). `net_side` and `net_cashflow` are always UNKNOWN. Legs below 100 contracts
+never qualify (`PKG_MIN_LEG_CONTRACTS` = 200).
+
+**Retired labels** (old records keep their text; `channels.LEGACY_LABELS` maps them):
+`OPPOSITE_SIDE_CAMPAIGN_CONFIRMED → …_SUSTAINED`, `REVERSAL_CLUSTER_CONFIRMED → …_SUSTAINED` (a restored
+state is upgraded on read), `ATTENTION_CONFIRMED → ATTENTION_SUSTAINED`, `VERIFIED_DISTRIBUTION →
+SUSTAINED_DISTRIBUTION`, `MAJORITY_EXITED → LIKELY_MAJORITY_EXITED`, campaign thesis "CAMPAIGN CONFIRMED" →
+"CAMPAIGN QUALIFIED". Card text no longer says "institutional" or "verified distribution".
+
+**Cards.** Entry (own paper order): "{side}-side premium leads… read as bullish/bearish flow *if* it is
+fresh directional buying" plus the **best non-directional alternative** (`hypotheses.best_alternative`), the
+NY time, DTE channel and one catalyst line. Near-miss (🟡 amber, research footer) follows the handoff
+layout: facts, NY time + DTE channel, a working hypothesis with its best alternative, the **one next check**
+(the largest route-score drag), and a catalyst line. No card can ping anyone.
+
+**Not applicable to a snapshot engine** (and so not built): the print-level OPRA archive, condition-code
+maps, quote-at-print side reads, venue/ms package grouping, `/follow` private positions, and 20-session
+per-series volume baselines. They need a trade-level feed that Jakenew does not consume.
+Tests: `test_handoff_alignment.py`, `test_calendar.py`, `test_notify_outbox.py`, `test_newspec.py`.

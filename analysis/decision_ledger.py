@@ -16,7 +16,7 @@ import json
 def build_record(*, now, ticker, side, metric, cand, decision, owner,
                  veto_reasons=None, code_version=None, config_hash=None,
                  candidate_expiry=None, candidate_strike=None, runtime_flags=None,
-                 entry_window=None) -> dict:
+                 entry_window=None, provenance=None) -> dict:
     m = metric or {}
     c = cand or {}
     inv = c.get('inventory') or {}
@@ -26,6 +26,8 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
     return {
         'ts': (now.isoformat() if hasattr(now, 'isoformat') else str(now)),
         'code_version': code_version, 'config_hash': config_hash,
+        # flow handoff §10: schema/ruleset version, NY session, DTE channel, coverage, catalyst status
+        **(provenance or {}),
         'ticker': ticker, 'side': side,
         # masses / control
         'raw_call_mass': round(m.get('call', {}).get('total', 0.0)) if m.get('call') else None,
@@ -39,6 +41,7 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
         'discovery_rank': m.get('discovery_rank'), 'qualified_control_rank': m.get('qualified_control_rank'),
         'attention_velocity': m.get('velocity'), 'attention_acceleration': m.get('acceleration'),
         'mass_z': m.get('mass_z'),
+        'baseline_n': m.get('baseline_n'), 'baseline_quality': m.get('baseline_quality'),
         # event / morphology (item 7: baseline_quality — UNSEEDED ≠ statistically-confirmed shock)
         'event_archetype': (c.get('archetype') or {}).get('archetype'),
         'bar_volume_shock': bs.get('shock'), 'relative_strike_shock': bs.get('rel_shock'),
@@ -50,6 +53,8 @@ def build_record(*, now, ticker, side, metric, cand, decision, owner,
         'inventory_depletion': (inv.get('depletion') or {}).get('state'),
         'package_hypothesis': (c.get('package') or {}).get('label'),
         'package_confidence': (c.get('package') or {}).get('confidence'),
+        'package_ratio': (c.get('package') or {}).get('ratio'),
+        'package_association': (c.get('package') or {}).get('association'),
         'hedge_read': (c.get('hedge') or {}).get('read'),
         'premium_driver': (c.get('decomp') or {}).get('driver'),
         'unexplained_share': (c.get('decomp') or {}).get('unexplained_share'),

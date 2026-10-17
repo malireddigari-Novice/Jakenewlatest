@@ -44,8 +44,8 @@ c_bad, cause_bad = hold.confidence_step(0.75, BAD, rotation_active=False)
 ck("multi-signal deterioration reduces confidence (drop-capped, not an instant collapse)",
    0.75 > c_bad >= 0.75 - config.CONF_MAX_DROP_PER_POLL - 1e-9)
 ck("dominant cause is the biggest penalty (distribution)", cause_bad == 'DISTRIBUTION')
-ck("exit label maps distribution → VERIFIED_DISTRIBUTION",
-   hold.exit_reason_from('DISTRIBUTION', BAD) == 'VERIFIED_DISTRIBUTION')
+ck("exit label maps distribution → SUSTAINED_DISTRIBUTION",
+   hold.exit_reason_from('DISTRIBUTION', BAD) == 'SUSTAINED_DISTRIBUTION')
 ck("diffuse cause → TRUE_MULTI_VARIABLE_EXHAUSTION",
    hold.exit_reason_from(None, {}) == 'TRUE_MULTI_VARIABLE_EXHAUSTION')
 
@@ -120,7 +120,7 @@ ck("does NOT exit on the first deterioration poll(s) — floor-break persistence
 exits = []
 for _ in range(4):
     exits += _bad_poll()
-LABELS = {'VERIFIED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER', 'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED',
+LABELS = {'SUSTAINED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER', 'OPPOSITE_SIDE_CAMPAIGN_SUSTAINED',
           'PREMIUM_STRUCTURE_FAILURE', 'RESILIENCE_FAILURE', 'TRUE_MULTI_VARIABLE_EXHAUSTION'}
 ck("SUSTAINED deterioration exits with a §20 confidence label",
    any(e['reason'] in LABELS for e in exits))

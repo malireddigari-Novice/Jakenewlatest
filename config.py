@@ -45,6 +45,9 @@ OPENING_RANGE_MINUTES = int(os.getenv('OPENING_RANGE_MINUTES', '5'))
 # EOD flatten time (CST). Same-day convexity is always closed before the bell.
 EOD_HOUR   = int(os.getenv('EOD_HOUR', '14'))
 EOD_MINUTE = int(os.getenv('EOD_MINUTE', '55'))
+# One-off exchange closures the rule-based calendar (data/exchange_calendar.py) cannot know — e.g. a
+# national day of mourning. Comma-separated ISO dates. Rule holidays + 1pm-ET early closes are automatic.
+EXTRA_MARKET_HOLIDAYS = [d.strip() for d in os.getenv('EXTRA_MARKET_HOLIDAYS', '').split(',') if d.strip()]
 
 # ── The Attention Engine (Layer 1 — cross-symbol allocation) ─────────────────
 ATTENTION_ENABLED   = os.getenv('ATTENTION_ENABLED', 'true').lower() == 'true'
@@ -827,6 +830,19 @@ REINFORCE_LOG_ENABLED     = os.getenv('REINFORCE_LOG_ENABLED', 'true').lower() =
 REINFORCE_MIN_INTERVAL_S  = float(os.getenv('REINFORCE_MIN_INTERVAL_S', '300'))  # throttle strengthening notices
 REINFORCE_MIN_CONF        = float(os.getenv('REINFORCE_MIN_CONF', '0.55'))  # don't post STRENGTHENING on a fading campaign
 # T+1 OI campaign confirmation (research): needs Schwab OI (currently off) to fetch next-day OI.
+# Flow handoff §3 — FEED COVERAGE. A ticker with no usable ingest for > COVERAGE_GAP_S is in a coverage
+# incident; after data resumes it stays DEGRADED for COVERAGE_RECOVERY_S (fresh windows span the gap and
+# would read as a fake shock) and takes no new entry. Exits/management still run.
+COVERAGE_GATE_ENABLED     = os.getenv('COVERAGE_GATE_ENABLED', 'true').lower() == 'true'
+COVERAGE_GAP_S            = float(os.getenv('COVERAGE_GAP_S', '30'))       # live cadence is 5s
+COVERAGE_RECOVERY_S       = float(os.getenv('COVERAGE_RECOVERY_S', '180')) # = WINDOW_SLOW (3 mid windows)
+COVERAGE_NOTIFY_MIN_GAP_S = float(os.getenv('COVERAGE_NOTIFY_MIN_GAP_S', '60'))  # Discord notice for gaps ≥ this (0 = off)
+# Flow handoff §4: an abnormality z needs history behind it. Below this many samples the per-ticker
+# baseline is UNSEEDED (z=0 means "no evidence", recorded as such — not "measured normal").
+MASS_BASELINE_MIN_SAMPLES = int(os.getenv('MASS_BASELINE_MIN_SAMPLES', '10'))
+# Flow handoff §8: optional verified catalyst calendar (JSON list; see analysis/catalyst.py). Absent
+# file → cards say "no verified calendar loaded". Only events published before the signal count.
+CATALYST_FILE             = os.getenv('CATALYST_FILE', 'catalysts.json')
 OI_CONFIRM_ENABLED        = os.getenv('OI_CONFIRM_ENABLED', 'false').lower() == 'true'
 OI_CONFIRM_FILE           = os.getenv('OI_CONFIRM_FILE', 'jakenew_campaigns.jsonl')
 OI_SUPPORT_RATIO          = float(os.getenv('OI_SUPPORT_RATIO', '0.50'))  # ΔOI ≥ this × full-session vol → OPENING_SUPPORTED
@@ -948,6 +964,7 @@ PKG_SIZE_TOL          = float(os.getenv('PKG_SIZE_TOL', '0.25'))     # leg sizes
 PKG_MIN_LEG_CONTRACTS = int(os.getenv('PKG_MIN_LEG_CONTRACTS', '200'))  # a leg must be at least this big
 PKG_RATIO_LO          = float(os.getenv('PKG_RATIO_LO', '1.7'))      # size ratio in [lo,hi] → RATIO leg
 PKG_RATIO_HI          = float(os.getenv('PKG_RATIO_HI', '2.3'))
+PKG_RATIO_LOT         = int(os.getenv('PKG_RATIO_LOT', '100'))       # round leg sizes to this lot before the GCD ratio
 PKG_NEIGHBOR_STRIKES  = int(os.getenv('PKG_NEIGHBOR_STRIKES', '2'))  # how many strikes away counts as an adjacent leg
 PKG_DISCOUNT          = float(os.getenv('PKG_DISCOUNT', '0.55'))     # qualified/quality discount when outright is doubtful
 PKG_VETO_ENABLED      = os.getenv('PKG_VETO_ENABLED', 'false').lower() == 'true'  # hard-veto entries on a strong non-outright package
@@ -999,7 +1016,7 @@ XEXP_CONFLICT_PENALTY  = float(os.getenv('XEXP_CONFLICT_PENALTY', '0.85'))# p_co
 # ═══════════════════════════════════════════════════════════════════════════════
 INV_DEPLETION_ENABLED  = os.getenv('INV_DEPLETION_ENABLED', 'true').lower() == 'true'
 INV_DEPLETE_PARTIAL    = float(os.getenv('INV_DEPLETE_PARTIAL', '0.25'))   # cumulative distribution frac → PARTIAL_EXIT
-INV_DEPLETE_MAJORITY   = float(os.getenv('INV_DEPLETE_MAJORITY', '0.60'))  # → MAJORITY_EXITED
+INV_DEPLETE_MAJORITY   = float(os.getenv('INV_DEPLETE_MAJORITY', '0.60'))  # → LIKELY_MAJORITY_EXITED
 INV_DEPLETE_CLOSED     = float(os.getenv('INV_DEPLETE_CLOSED', '0.85'))    # → LIKELY_CLOSED
 
 # ═══════════════════════════════════════════════════════════════════════════════

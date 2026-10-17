@@ -16,7 +16,8 @@ import time
 import config
 from data.alpaca_client import AlpacaClient
 from data.alpaca_data_client import AlpacaDataClient
-from data.market_utils import is_market_open, is_preopen_seed, is_weekday, now_cst
+from data.market_utils import (is_market_open, is_preopen_seed, is_trading_day, now_cst,
+                               session_close)
 from engine import AttentionEngine
 
 try:
@@ -162,10 +163,13 @@ def main() -> None:
             # Exit once the day is done (EOD flatten complete, or a weekday launch already past
             # the close) so the NEXT 08:10 scheduled launch always starts fresh with the on-disk
             # code. A long-lived process would otherwise keep running stale code day after day.
-            close_dt = now.replace(hour=config.MARKET_CLOSE_HOUR,
-                                   minute=config.MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+            # An exchange holiday is a non-session: exit at once. On an early-close day the close
+            # (and the EOD flatten inside the engine) is 12:00 CT, not the regular time.
+            if not is_trading_day(now):
+                log.info("%s is not a trading day (weekend/exchange holiday) — exiting.", now.date())
+                break
             if (engine.state.get('eod_done') == now.date().isoformat()
-                    or (is_weekday(now) and now >= close_dt)):
+                    or now >= session_close(now)):
                 log.info("Session complete for %s — exiting so the next launch runs fresh code.",
                          now.date())
                 break
