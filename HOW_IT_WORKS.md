@@ -84,6 +84,9 @@ Mag-7 campaigns may coexist, governed by the portfolio-correlation gate, NOT a o
 > (tagged SIM, never published). `CF_MODE=PAPER`: it owns the Alpaca **paper** orders and the legacy engine
 > keeps computing but stops ordering and stops the EOD account-wide liquidation. Full description in
 > **Campaign-flow policy** at the end of this document; compare both with `python cf_report.py <session>`.
+> **Live `.env` as of 2026-10-17: `CF_MODE=PAPER`, `CF_DISCORD_ENABLED=true`.** The campaign-flow policy owns the
+> paper orders and posts its ENTRY/EXIT cards; the legacy engine below runs for comparison only (no orders,
+> no EOD liquidation).
 
 ---
 
