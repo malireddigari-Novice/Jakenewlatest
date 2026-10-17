@@ -78,6 +78,13 @@ Mag-7 campaigns may coexist, governed by the portfolio-correlation gate, NOT a o
 > new day-one behavior vs prior sessions: **up to 4 concurrent campaigns** + the **absolute-event
 > activation route** — expect more, lower-rank entries; watch `jakenew_decisions.jsonl`.
 
+> **Campaign-flow policy (2026-10-17, `Logic for Jake.txt` Oct-15 revision) — runs beside the engine below.**
+> A second, separate policy (`campaign_flow/`) is evaluated on the **same 5-second polls** as everything in this
+> document. `CF_MODE=SHADOW` (default): it decides and journals, and its fills come from a simulated broker
+> (tagged SIM, never published). `CF_MODE=PAPER`: it owns the Alpaca **paper** orders and the legacy engine
+> keeps computing but stops ordering and stops the EOD account-wide liquidation. Full description in
+> **Campaign-flow policy** at the end of this document; compare both with `python cf_report.py <session>`.
+
 ---
 
 ## The core idea
@@ -1479,4 +1486,127 @@ annotations); and **trade merit** (not decided, only a research outcome ledger).
   not specially reconciled.
 - The handoff ZIP (its 43-tag list, 52 tests and fixtures) was never provided. The taxonomy and tests
   here implement every family the handoff names, but they are not that ZIP.
+
+---
+
+## Campaign-flow policy (Logic for Jake.txt, Oct-15 revision) — `campaign_flow/`
+
+A separate policy built from the consolidated developer README. Its four decisions stay separate: **observe**
+concentrated shocks, **qualify** the buy hypothesis (exact-contract low value band and verified clusters),
+**propose** an entry, and **manage** each filled campaign. A score never authorizes an entry, a proposal is
+never an execution, and a usable quote never establishes a fill. Every threshold is a configurable paper
+default (`campaign_flow/settings.py`, env `CF_*`) folded into `RULE_VERSION`. None of them is calibrated.
+
+**Data (snapshot adapter, `campaign_flow/pipeline.py`).** Each engine poll is recorded to
+`cf_obs/<session>.jsonl`, together with every reference fetch, each stamped with the time it became
+available. The pipeline only reads those observations, so a replay reproduces the live decisions.
+- **Windows:** completed 60 s slots, bounded by the polls on either side, so every contract of a ticker shares
+  the same window boundaries.
+- **Bins:** the volume added between consecutive polls; the bins are disjoint and sum to the window volume.
+- **Near-ask volume:** an interval's added volume counts as near-ask when its newest print is an ordinary
+  electronic print at or above 80% of the way from bid to ask. This is a *proxy*: snapshots show only the
+  newest print, not every trade.
+- **Print count and largest print:** lower bounds.
+- **Complex legs:** MIXED if any observed print is complex or stock-tied. Otherwise UNAVAILABLE, never SIMPLE.
+- **Baseline:** the same contract's volume per window in the same time-of-day bucket of the prior session,
+  from 1-min bars.
+- **Value references:** prior-session 1-min closes plus today's observed prints, all on a trade-price basis.
+- **Underlying direction:** the engine's own rule, the spot change over 30 s; a flat spot confirms neither
+  side.
+- **Coverage:** the listed strikes in the band must all be present, and >= 90% of quotes <= 30 s old.
+
+**Rules, by handoff section**
+- §3 **Exact-contract value gate:** compares only with earlier marks of the same series. Needs >= 20 marks,
+  all strictly before the window start. Percentile = (marks below + 1/2 marks equal) / n.
+  - <= 0.25 is LOW, the only band that earns buy attention.
+  - Middle band: `PREMIUM_OUTSIDE_LOW_VALUE_BAND`.
+  - >= 0.75: `HIGH_VALUE_FLOW_SELL_OR_CLOSE_POSSIBLE`.
+  - Too little history: `EXACT_CONTRACT_VALUE_HISTORY_MISSING`.
+- §4 **Shock:** a window <= 300 s with >= 50 contracts, >= 3 prints, >= 2x baseline and >= 60% near-ask. It
+  also needs a concentrated shape: either the top bin >= 45% and top two bins >= 70%, or the largest print
+  >= 35%. A flat shape is background. Premium must end higher than it started for the shock to count toward
+  control; otherwise `FLOW_WITHOUT_PREMIUM_ACCEPTANCE_WATCH`.
+- §5 **Clusters:** calls and puts are checked separately within each expiration. A cluster is either a pair of
+  neighbouring qualifying strikes (gap <= 2.5% of spot) in two matching window slots, or one strike in three
+  windows. Windows must end <= 420 s apart, the latest <= 300 s old, the snapshot <= 60 s old, with complete
+  coverage.
+  - BULLISH_CONTROL: calls clustered, puts not, plus bullish underlying.
+  - BEARISH_CONTROL: the mirror.
+  - Both sides clustered: CONTESTED.
+- §6 **Board:** the strongest eligible event per side per ticker.
+  - Score: 100 x (0.55 surprise + 0.30 shape + 0.15 recency) x relevance, where relevance runs 0.65-1 by
+    strike distance in expected-move units.
+  - Board order uses the raw score.
+- §7 **Turnover resemblance:**
+  - Match budget: min(previous volume, morning OI, OI build), or half strength without the earlier OI.
+  - Only the part of a window that overlaps the budget counts.
+  - For 0DTE, the earliest same-day cohort counts at half weight.
+  - The board keeps raw and discounted scores side by side, with `LEADER_SCENARIO_DISAGREEMENT` and
+    `SIDE_SCENARIO_DISAGREEMENT` labels.
+  - Resemblance never vetoes a same-side entry.
+- §8 **Entry:**
+  - Requirements: verified one-sided control, a suitable contract and reserved capacity.
+  - Contract checks: right matches the direction; the expiry outlives the planned end (SWING +1 day); the
+    quote <= 30 s old; relative spread <= 0.30; ask size >= 1.
+  - Reference budget: $2,000, at most 2 contracts per proposal.
+  - Daily cap: 2 proposals per ticker per New York day; cancelled proposals still count.
+  - The old 0.550 route score is only logged (`VERIFIED_CLUSTER_BELOW_SCORE_BOUNDARY`).
+  - Horizon: INTRADAY by default; the planned end is 15:30 NY.
+- §9/§10 **OI reference:**
+  - Before the cutoff, the contract master (OI with its as-of date) is fetched.
+  - The nearest expiration is frozen once per session between open - 10 min and the open. A late run records
+    MISSING and is never backfilled.
+  - The official open (first SIP 1-min bar) is pinned.
+  - Levels: the three largest OI nodes among the six nearest eligible strikes on each side of the fixed open.
+  - Zones for clusters exist only in the journal; OI never gates entries or exits.
+- §11/§12 **Management:**
+  - **No exit** for premium dips, lower lows, board changes, pauses, vague exhaustion, OI touches,
+    +60%/+150% gains or trailing thresholds.
+  - **No default stop.** `CF_PREMIUM_LOSS_LIMIT` and `CF_UNDERLYING_INVALIDATION_PCT` are off unless set
+    before entry.
+  - **Full-exit requests, in priority order:**
+    1. Favorable overnight underlying gap.
+    2. Planned or expiry deadline: 15:30 NY, earlier on a half day.
+    3. Precommitted risk limit.
+    4. Confirmed opposite one-sided cluster with bearish/bullish underlying, using flow after this
+       campaign's entry only. A turnover-matched cluster also needs independent unmatched follow-through.
+- §13/§14 **Orders and lifecycle:**
+  - An exit intent persists through unusable quotes (`EXIT_PENDING_EXECUTABLE_QUOTE`) and partial fills.
+  - States: PROPOSED -> ACTIVE -> ENTRY_PENDING / CLOSED / CANCELLED. Fills update the weighted average entry;
+    an unfilled remainder is cancelled after 90 s.
+  - An opposite entry waits until the source campaign is fully CLOSED, then becomes a new campaign that
+    references it. While an opposite campaign is open, only this rotation path may enter the other side.
+  - Orders use idempotent client ids (`cf-<campaign>-E`, `-X<n>`), and every event runs exactly once.
+- §15 **Cards:** ENTRY_PROPOSED / ENTRY_FILLED / EXIT_PROPOSED / EXIT_FILLED, with the exact footer and
+  mention-safe fields. Samples are in `docs/CAMPAIGN_FLOW_CARD_SAMPLES.md`. Cards are published only in
+  PAPER mode with `CF_DISCORD_ENABLED=true`; SIM fills are never published.
+- §16 **Journal:** `jakenew_campaign_flow.db` (schema `cf-journal-1`; an unknown schema is refused) holds:
+  - windows with every rejection reason, value provenance, the board, candidates and WATCH reasons
+  - proposals, orders, fills and reconciliation exceptions
+  - the OI chains, freeze and opening price
+  - turnover memory and cohorts
+  - cards and shadow marks for suppressed candidates (+5/+15/+30 min, close, next open), which are
+    observations and never fills
+
+**Restart:** the session log is replayed in memory-only rebuild mode (no decisions, orders or cards), then live
+polls resume; re-delivered polls are rejected as duplicates.
+
+**Integration decisions that the source left open:**
+- Pair adjacency follows the reference (neighbouring qualifying strikes, no ATM gate).
+- The near-ask tolerance, baseline estimator and sync rule are as above.
+- A zero-price exit is allowed only as an explicit expiration write-off record.
+- An opposite ordinary entry is blocked while an opposite campaign is open (rotation path only).
+
+**Tests:**
+- `test_campaign_flow.py`: 113 checks covering all 38 acceptance items.
+- `test_campaign_flow_pipeline.py`: windows -> cluster -> proposal -> fill -> rotation -> close -> opposite
+  entry; replay determinism; restart; partial fills; TTL cancel; no duplicate orders or cards.
+
+**Known limits:**
+- Snapshot polling sees only the newest print per poll, so near-ask, print counts and complex-leg status are
+  proxies or lower bounds.
+- The handoff's numeric thresholds are unvalidated.
+- The October 15 review trades (AAPL 345C, GOOGL 350P, NVDA 215P, AMZN 252.5P, TSLA 360P, MSFT 537.5P) are
+  in this engine's log for **2026-10-15**. `cf_report.py 2026-10-15` lists them: 5 of 6 exits used reasons
+  this policy removes. No synchronized tape for that day exists to replay the new policy over it.
 

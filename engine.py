@@ -13,7 +13,7 @@ Each poll:
      still passing the §16 contract gates (notional, liquidity, spread, staleness, freshness).
 
 The goal is 0-3 waves and ≤5 primary entries per session — not a trade every qualifying
-minute. Execution is real only when config.ALPACA_ENABLED; otherwise SHADOW accounting.
+minute. Execution is real only when config.LEGACY_ORDERS_ENABLED; otherwise SHADOW accounting.
 """
 import logging
 from datetime import date, datetime
@@ -106,6 +106,17 @@ class AttentionEngine:
         self._shape_hist: dict = {}        # rolling-shape: (sym,side) -> [recent price-response shapes]
         self.archive = replay.ResearchArchive(config.RESEARCH_ARCHIVE_FILE)  # Phase 6
         self._archive_ts = None            # Phase 6: last candidate-snapshot write (throttle)
+
+        # Campaign-flow policy (Logic for Jake.txt Oct-15 revision) — runs on these SAME polls, in SHADOW by
+        # default; with CF_MODE=PAPER it owns the paper orders and this engine stops ordering.
+        self.cf = None
+        self._raw_snaps: dict = {}         # sym -> (spot, expiry, unfiltered snapshots) for this poll
+        if config.CF_MODE in ('SHADOW', 'PAPER'):
+            try:
+                from campaign_flow.runner import Runner
+                self.cf = Runner(alpaca_data, alpaca_exec)
+            except Exception:
+                logger.warning("campaign-flow disabled: init failed", exc_info=True)
 
         self.state = state.load()
         # P1: on a mid-day RESTART, don't treat today as a fresh session — anchor the session date
@@ -214,7 +225,7 @@ class AttentionEngine:
             logger.info("-- New session %s - waves/mass/baselines reset --", today)
 
     def _reconcile_positions(self) -> None:
-        if not (self.exec and config.ALPACA_ENABLED):
+        if not (self.exec and config.LEGACY_ORDERS_ENABLED):
             return
         kept = []
         for pos in self.state.get('positions', []):
@@ -386,15 +397,18 @@ class AttentionEngine:
         if phase == 'closed':
             return
         self._roll_session(today_cst())
+        self._raw_snaps = {}
         measured = self._ingest_all(now)
 
         if phase == 'preopen':
+            self._cf_feed(now)
             for s in measured:
                 self.flow.mark_poll(s, now)
             logger.info("PREOPEN  seeding baselines (%d names) - capturing the open", len(measured))
             return
 
         ranked, metrics_by, cand, market_mass = self._build_metrics(measured, now)
+        self._cf_feed(now, cand, metrics_by)
         for s in measured:
             self.flow.mark_poll(s, now)
         if not ranked:
@@ -545,6 +559,7 @@ class AttentionEngine:
                 snaps = self.data.get_option_snapshots(sym, expiry, spot, config.PREMIUM_BAND_PCT)
                 if not snaps:
                     continue
+                self._raw_snaps[sym] = (spot, expiry, snaps)
                 # Addendum #11-12: validate the OPRA stream before it feeds event detection — drop
                 # crossed/negative/no-mark snapshots so a bad quote can't fabricate an "event".
                 if config.DATA_QUALITY_ENABLED:
@@ -560,6 +575,35 @@ class AttentionEngine:
             except Exception:
                 logger.warning("%s: ingest failed", sym, exc_info=True)
         return measured
+
+    def cf_tick(self, now: datetime) -> None:
+        """Campaign-flow reference jobs (contract master/OI before the cutoff, OI freeze, pinned open).
+        Called every main-loop iteration, including before the pre-open seed."""
+        if self.cf:
+            try:
+                self.cf.tick(now)
+            except Exception:
+                logger.warning("campaign-flow tick failed", exc_info=True)
+
+    def _cf_feed(self, now, cand=None, metrics_by=None) -> None:
+        """Hand this poll's unfiltered snapshots to the campaign-flow policy with the legacy policy's own
+        reads for the same instant (attention score, rank, route raw score) for side-by-side comparison."""
+        if not self.cf:
+            return
+        for sym, (spot, expiry, snaps) in self._raw_snaps.items():
+            legacy = {}
+            try:
+                m, c = (metrics_by or {}).get(sym) or {}, (cand or {}).get(sym)
+                legacy = {'attention_score': m.get('attention_score'), 'rank': m.get('rank'),
+                          'side': (c or {}).get('side')}
+                if c and m and config.ENTRY_ROUTES_ENABLED:
+                    legacy['route_score'] = entry.decide(c, m).get('raw_score')
+            except Exception:
+                pass
+            try:
+                self.cf.on_poll(now, sym, spot, expiry, snaps, legacy)
+            except Exception:
+                logger.warning("campaign-flow poll failed for %s", sym, exc_info=True)
 
     def _coverage_incident(self, inc, now) -> None:
         """A feed gap closed: the next fresh-window read spans the gap, so the ticker is DEGRADED (no new
@@ -1649,14 +1693,14 @@ class AttentionEngine:
         if not expiry or not limit:
             return 'DATA_QUALITY_REJECTION'
         qty = 1
-        if self.exec and config.ALPACA_ENABLED:
+        if self.exec and config.LEGACY_ORDERS_ENABLED:
             qty, _ = self.exec.calculate_qty(limit)
             if qty <= 0:
                 logger.info("ENTRY-REJECT %s %s sizing=0", sym, side)
                 return 'MISSED_DUE_TO_CAPACITY'
         occ = occ_symbol(sym, expiry, best['strike'], side)
         order = self.orders.submit_entry(occ, sym, expiry, best['strike'], side, qty, limit)
-        if order is None and self.exec and config.ALPACA_ENABLED:
+        if order is None and self.exec and config.LEGACY_ORDERS_ENABLED:
             return 'DATA_QUALITY_REJECTION'
         w.entry_issued = True
         if w.active_ts is None:      # entered while FORMING → anchor the min-hold at entry time
@@ -1714,7 +1758,7 @@ class AttentionEngine:
             'entry_share': m['attention_share'], 'entry_rank': m['rank'],
             'entry_control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
         })
-        mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
+        mode = 'LIVE' if (self.exec and config.LEGACY_ORDERS_ENABLED) else 'SHADOW'
         logger.info("[%s] ENTER %s %s %g x%d @ $%.2f  NEW WAVE %s (%s share=%.0f%% z=%.1f "
                     "ctrl=%.2f resp=%+.0f%% shape=%s fresh=%s lag=%ss | %s post=%.2f dist=%.2f "
                     "ev=%.2f eff=%.2f cont=%.2f sust=%.2f %s)",
@@ -1806,11 +1850,11 @@ class AttentionEngine:
         if sell >= qty:
             self._close(pos, mark, now, reason=reason)
             return
-        if self.exec and config.ALPACA_ENABLED:
+        if self.exec and config.LEGACY_ORDERS_ENABLED:
             self.exec.close_position_qty(pos['occ'], sell)
         pos['qty'] = qty - sell
         pos['tp1_done'] = True
-        mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
+        mode = 'LIVE' if (self.exec and config.LEGACY_ORDERS_ENABLED) else 'SHADOW'
         logger.info("[%s] SCALE %s %s sell %d/%d @ $%.2f (%s +%.0f%%)",
                     mode, pos['symbol'], pos['side'], sell, qty, mark, reason, 100 * pnl)
         notify.scale_card(pos, sold=sell, remaining=pos['qty'], price=mark, reason=reason,
@@ -1838,7 +1882,7 @@ class AttentionEngine:
                                        'confidence': (w.confidence if w else None),
                                        'mfe': mfe, 'mae': mae, 'entry_price': entry, 'exit_price': mark,
                                        'wave_id': pos.get('wave_id'), 'archetype': pos.get('archetype')}))
-        mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
+        mode = 'LIVE' if (self.exec and config.LEGACY_ORDERS_ENABLED) else 'SHADOW'
         # P1: a genuine exit ends the campaign; an EOD flatten does NOT (position flat, but the
         # campaign persists if the expiry survives — position persistence ≠ campaign persistence).
         if config.CROSS_SESSION_MEMORY_ENABLED and reason != 'EOD_FLATTEN':
@@ -1867,13 +1911,13 @@ class AttentionEngine:
         self._sheet(lambda: self.sheets.log_trade_exit(pos, price=mark, reason=reason, pnl=pnl,
                                                        mode=mode, category=category, hold_s=hold_s,
                                                        mfe=mfe, mae=mae))
-        if self.exec and config.ALPACA_ENABLED:
+        if self.exec and config.LEGACY_ORDERS_ENABLED:
             self.exec.close_position_qty(pos['occ'], pos['qty'])
         self.orders.clear(pos['occ'])
         self.waves.force_end(pos['symbol'], pos['side'], now, reason=reason, metric=metric)
         if pos in self._held():
             self._held().remove(pos)
-        mode = 'LIVE' if (self.exec and config.ALPACA_ENABLED) else 'SHADOW'
+        mode = 'LIVE' if (self.exec and config.LEGACY_ORDERS_ENABLED) else 'SHADOW'
         logger.info("[%s] EXIT %s %s x%d @ $%.2f (%s %s%.0f%%)  wave=%s  decided_by=%s  CAMPAIGN ENDED: %s",
                     mode, pos['symbol'], pos['side'], pos['qty'], mark, reason,
                     '+' if pnl >= 0 else '', 100 * pnl, pos.get('wave_id'),
@@ -1924,7 +1968,7 @@ class AttentionEngine:
         for pos in list(self._held()):
             mark = self._current_mark(pos) or pos['entry_price']
             self._close(pos, mark, now, reason='EOD_FLATTEN')
-        if self.exec and config.ALPACA_ENABLED:
+        if self.exec and config.LEGACY_ORDERS_ENABLED:
             self.exec.close_all_positions()
         self._attrition_report()
         state.save(self.state)

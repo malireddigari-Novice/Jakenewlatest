@@ -128,6 +128,36 @@ class AlpacaClient:
             logger.error("Alpaca: EOD liquidation failed: %s", exc)
             return 0
 
+    # ── campaign-flow order primitives (idempotent client_order_id) ─────────────
+
+    def submit_limit(self, occ: str, side: str, qty: int, limit_price: float,
+                     client_order_id: str) -> Optional[dict]:
+        """Day LIMIT order with a caller-chosen client_order_id (Alpaca rejects a reused id, so a retry
+        after a crash cannot create a second order)."""
+        payload = {'symbol': occ, 'qty': str(qty), 'side': side, 'type': 'limit', 'time_in_force': 'day',
+                   'limit_price': f"{limit_price:.2f}", 'client_order_id': client_order_id}
+        return self._post_order(payload, f"{side.upper()} {occ} x{qty} @${limit_price:.2f} [{client_order_id}]")
+
+    def get_order_by_client_id(self, client_order_id: str) -> Optional[dict]:
+        try:
+            r = requests.get(f"{self._base}/v2/orders:by_client_order_id", headers=self._headers,
+                             params={'client_order_id': client_order_id}, timeout=10)
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            logger.warning("Alpaca: order lookup failed for %s: %s", client_order_id, exc)
+            return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        try:
+            r = requests.delete(f"{self._base}/v2/orders/{order_id}", headers=self._headers, timeout=10)
+            return r.status_code in (200, 204, 422)        # 422 = already filled/cancelled
+        except Exception as exc:
+            logger.warning("Alpaca: cancel failed for %s: %s", order_id, exc)
+            return False
+
     def _post_order(self, payload: dict, label: str) -> Optional[dict]:
         try:
             r = requests.post(f"{self._base}/v2/orders", json=payload,

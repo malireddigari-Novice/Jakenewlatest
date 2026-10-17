@@ -180,6 +180,12 @@ class AlpacaDataClient:
                 'delta':        g.get('delta'),
                 'gamma':        g.get('gamma'),
                 'implied_vol':  float(raw_iv) if raw_iv is not None else None,
+                # newest print + prior-session volume (campaign-flow window adapter)
+                'trade_px':     float(tr['p']) if tr.get('p') else None,
+                'trade_ts':     tr.get('t'),
+                'trade_size':   int(tr.get('s') or 0) if tr else None,
+                'trade_cond':   tr.get('c'),
+                'prev_volume':  int((s.get('prevDailyBar') or {}).get('v') or 0),
             }
         return parsed
 

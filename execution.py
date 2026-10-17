@@ -84,7 +84,7 @@ class OrderManager:
         if occ in self._pending:
             logger.info("execution: duplicate entry suppressed for %s", occ)
             return None
-        if not (self.exec and config.ALPACA_ENABLED):
+        if not (self.exec and config.LEGACY_ORDERS_ENABLED):
             return {'shadow': True, 'occ': occ, 'qty': qty, 'limit_price': limit}
         self._pending.add(occ)
         order = self.exec.place_option_order(symbol, expiry, strike, side, qty, limit)
@@ -97,6 +97,6 @@ class OrderManager:
 
     def reconcile(self, occ: str) -> dict | None:
         """Broker's ground truth for a position (None = not held / unfilled)."""
-        if self.exec and config.ALPACA_ENABLED:
+        if self.exec and config.LEGACY_ORDERS_ENABLED:
             return self.exec.position(occ)
         return None

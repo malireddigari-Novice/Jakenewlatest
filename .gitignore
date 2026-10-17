@@ -47,3 +47,7 @@ jakenew_outbox.db
 jakenew_tape.db
 tape_raw/
 replay_*.db
+
+# campaign-flow policy journal + recorded observations
+jakenew_campaign_flow.db
+cf_obs/

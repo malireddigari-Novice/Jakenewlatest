@@ -130,6 +130,11 @@ ALPACA_API_KEY     = os.getenv('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY  = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_PAPER       = os.getenv('ALPACA_PAPER',   'true').lower()  == 'true'
 ALPACA_ENABLED     = os.getenv('ALPACA_ENABLED', 'false').lower() == 'true'
+# Campaign-flow policy (campaign_flow/, Logic for Jake.txt Oct-15 revision): OFF | SHADOW | PAPER. Only one
+# policy may own the Alpaca paper orders: with CF_MODE=PAPER the legacy engine keeps computing on the same
+# polls (for comparison) but stops sending orders and never liquidates the account at EOD.
+CF_MODE            = os.getenv('CF_MODE', 'SHADOW').upper()
+LEGACY_ORDERS_ENABLED = ALPACA_ENABLED and CF_MODE != 'PAPER'
 TRADE_PCT          = float(os.getenv('TRADE_PCT', '0.01'))   # fraction of portfolio value per trade
 MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '1'))
 

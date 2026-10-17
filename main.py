@@ -156,6 +156,7 @@ def main() -> None:
     while True:
         try:
             now = now_cst()
+            engine.cf_tick(now)               # campaign-flow pre-open OI / opening-price jobs
             active = is_market_open(now) or is_preopen_seed(now)
             if active:
                 engine.poll()                 # poll() handles pre-open seeding + phase internally
