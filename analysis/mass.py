@@ -105,10 +105,8 @@ class _EWMAZ:
     """
     def __init__(self):
         self.mean = None; self.mad = None
-        self.n = 0                     # samples behind the baseline (flow handoff §4: missing ≠ zero)
 
     def z_and_update(self, x: float) -> float:
-        self.n += 1
         if self.mean is None:
             self.mean = x; self.mad = max(abs(x), config.WAVE_EPS)
             return 0.0
@@ -175,10 +173,6 @@ class TickerMass:
             'call_control': round(call_ctrl, 3), 'put_control': round(put_ctrl, 3),
             'signed_control': round(call_ctrl - put_ctrl, 3),
             'wave_energy': round(self.wave_energy), 'baseline_mean': round(self.z_tot.mean or 0.0),
-            # z on an UNSEEDED baseline is 0 by construction ("no evidence"), not "measured normal" —
-            # the label keeps the two apart in the ledger and research reads.
-            'baseline_n': self.z_tot.n,
-            'baseline_quality': ('SEEDED' if self.z_tot.n > config.MASS_BASELINE_MIN_SAMPLES else 'UNSEEDED'),
         }
 
     def mark_wave_end(self):

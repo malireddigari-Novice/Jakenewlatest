@@ -21,26 +21,12 @@ PKG_VETO, can hard-reject it. Conservative by construction: only clear size-matc
 """
 import config
 
-RULE_VERSION = 'pkg-snapshot-v2'
-
 
 def _matched(a, b) -> bool:
     """Two leg sizes count as size-matched when within ±PKG_SIZE_TOL of each other."""
     if a <= 0 or b <= 0:
         return False
     return abs(a - b) / max(a, b) <= config.PKG_SIZE_TOL
-
-
-def leg_ratio(a, b) -> str | None:
-    """Leg sizes reduced to their greatest-common-divisor ratio — 4,000 vs 7,000 is "4:7", never 1:1.
-    Sizes are first rounded to PKG_RATIO_LOT contracts so split-fill noise does not explode the ratio."""
-    from math import gcd
-    lot = max(1, config.PKG_RATIO_LOT)
-    x, y = int(round((a or 0) / lot)), int(round((b or 0) / lot))
-    if x <= 0 or y <= 0:
-        return None
-    g = gcd(x, y)
-    return f"{x // g}:{y // g}"
 
 
 def _ratio(a, b) -> bool:
@@ -75,18 +61,11 @@ def resolve(strike, side, vols_by_leg, spot, *, cross_expiry_vol=None) -> dict:
     neighbors = sorted(((k, v) for (k, s), v in (vols_by_leg or {}).items()
                         if s == side and k != strike and v and v >= config.PKG_MIN_LEG_CONTRACTS),
                        key=lambda kv: abs(kv[0] - strike))
-    partner = None                                    # (strike, side, vol) of the co-print behind the top read
-    if p['ROLL'] and cross_expiry_vol:
-        partner = (strike, side, cross_expiry_vol.get((strike, side), 0) or 0)
-    if p['STRADDLE']:
-        partner = (strike, opp, vp)
     for k, v in neighbors[:config.PKG_NEIGHBOR_STRIKES * 2]:
         if _matched(v0, v):
             p['VERTICAL'] = max(p['VERTICAL'], 0.55)
-            partner = partner or (k, side, v)
         elif _ratio(v0, v) or _ratio(v, v0):
             p['RATIO'] = max(p['RATIO'], 0.45)
-            partner = partner or (k, side, v)
     complex_prob = min(1.0, p['ROLL'] + p['STRADDLE'] + p['VERTICAL'] + p['RATIO'])
     p['OUTRIGHT'] = round(1.0 - complex_prob, 3)
     top = max((k for k in p if k != 'OUTRIGHT'), key=lambda k: p[k])
@@ -97,14 +76,7 @@ def resolve(strike, side, vols_by_leg, spot, *, cross_expiry_vol=None) -> dict:
              'CALENDAR': 'CALENDAR_LIKELY'}[top]
     # discount scales with how confident we are it is NOT outright
     disc = 1.0 - (1.0 - config.PKG_DISCOUNT) * complex_prob
-    # Flow handoff §5: association from time/size alone is the WEAKEST grade — the snapshot feed has no
-    # complex-order condition codes, venue or ms timestamps. Leg sides, the debit/credit and any stock
-    # leg are UNKNOWN; this is a package CANDIDATE, never a known structure or a net cashflow.
     return {'label': label, 'confidence': round(complex_prob, 3), 'complex_prob': round(complex_prob, 3),
-            'association': 'TIME_SIZE_ONLY', 'net_side': 'UNKNOWN', 'net_cashflow': 'UNKNOWN',
-            'partner': ({'strike': partner[0], 'side': partner[1], 'contracts': partner[2]} if partner else None),
-            'ratio': leg_ratio(v0, partner[2]) if partner else None,
-            'rule_version': RULE_VERSION,
             'probs': {k: round(v, 3) for k, v in p.items()},
             'leg': complex_prob >= config.PKG_VETO_MIN_CONF, 'discount': round(disc, 3),
             'reason': f'{label} p={complex_prob:.2f} (outright {p["OUTRIGHT"]:.2f}) — probabilistic, no condition codes'}
@@ -114,5 +86,4 @@ def _out(probs, reason):
     full = {'OUTRIGHT': 0.0, 'ROLL': 0.0, 'CALENDAR': 0.0, 'STRADDLE': 0.0, 'VERTICAL': 0.0, 'RATIO': 0.0}
     full.update(probs)
     return {'label': 'OUTRIGHT_LIKELY', 'confidence': 0.0, 'complex_prob': 0.0, 'probs': full,
-            'association': None, 'net_side': 'UNKNOWN', 'net_cashflow': 'UNKNOWN', 'partner': None,
-            'ratio': None, 'rule_version': RULE_VERSION, 'leg': False, 'discount': 1.0, 'reason': reason}
+            'leg': False, 'discount': 1.0, 'reason': reason}

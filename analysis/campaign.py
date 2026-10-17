@@ -153,7 +153,7 @@ def _thesis(sym, side, share, z, ctrl, dist, resp, acc_label, confirmed, missing
              f"accumulation begun (resp {100*resp:+.0f}%, {acc_label or 'n/a'})",
              f"{verb} control the tape ({ctrl:.2f})",
              f"still cheap ({dist:.2f}x low)"]
-    head = "CAMPAIGN QUALIFIED" if confirmed else f"NOT A CAMPAIGN (missing: {','.join(missing) or 'score'})"
+    head = "CAMPAIGN CONFIRMED" if confirmed else f"NOT A CAMPAIGN (missing: {','.join(missing) or 'score'})"
     return f"{head} — " + "; ".join(parts)
 
 
@@ -171,9 +171,9 @@ _END = {
     'DISTRIBUTION_EXIT':         'distribution — coherent exit flow closed the runner',
     'RUNNER_TRAIL':              'objective — runner trailing stop protected the extended run',
     # Follow-up §20 — campaign-confidence exit labels (CampaignConfidence eroded below threshold)
-    'SUSTAINED_DISTRIBUTION':               'thesis dead — sustained distribution pattern',
+    'VERIFIED_DISTRIBUTION':               'thesis dead — verified distribution',
     'PERSISTENT_CONTROL_TRANSFER':         'thesis dead — control persistently transferred',
-    'OPPOSITE_SIDE_CAMPAIGN_SUSTAINED':    'thesis dead — opposite-side campaign sustained',
+    'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED':    'thesis dead — opposite-side campaign confirmed',
     'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE': 'thesis dead — rotation AND the current campaign failed',
     'PREMIUM_STRUCTURE_FAILURE':           'thesis dead — premium structure broke',
     'RESILIENCE_FAILURE':                  'thesis dead — campaign resilience collapsed',
@@ -209,9 +209,9 @@ _EXIT_CATEGORY = {
     'ROTATION': 'THESIS_DEATH', 'STATISTICAL_EXHAUSTION': 'THESIS_DEATH',
     'DISTRIBUTION_EXIT': 'DISTRIBUTION', 'DISTRIBUTION_REDUCE': 'DISTRIBUTION',
     # Follow-up §20 confidence-exit labels
-    'SUSTAINED_DISTRIBUTION': 'DISTRIBUTION',
+    'VERIFIED_DISTRIBUTION': 'DISTRIBUTION',
     'PERSISTENT_CONTROL_TRANSFER': 'CONTROL_TRANSFER',
-    'OPPOSITE_SIDE_CAMPAIGN_SUSTAINED': 'CONTROL_TRANSFER',
+    'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED': 'CONTROL_TRANSFER',
     'REVERSAL_ACTIVATED': 'REVERSAL',
     'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE': 'THESIS_DEATH',
     'PREMIUM_STRUCTURE_FAILURE': 'THESIS_DEATH',
@@ -227,8 +227,8 @@ def exit_category(reason: str) -> str:
 # Which decision path OWNED the exit (for precedence auditing — was it the new hold engine or a
 # legacy/structural rule?). The confidence hold-engine labels are §20; legacy wave labels are the
 # old rotation/exhaustion/control-transfer; the rest are risk/objective/EOD/overwhelming.
-_CONFIDENCE_EXITS = {'SUSTAINED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER',
-                     'OPPOSITE_SIDE_CAMPAIGN_SUSTAINED', 'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE',
+_CONFIDENCE_EXITS = {'VERIFIED_DISTRIBUTION', 'PERSISTENT_CONTROL_TRANSFER',
+                     'OPPOSITE_SIDE_CAMPAIGN_CONFIRMED', 'ROTATION_WITH_CURRENT_CAMPAIGN_FAILURE',
                      'PREMIUM_STRUCTURE_FAILURE', 'RESILIENCE_FAILURE', 'TRUE_MULTI_VARIABLE_EXHAUSTION'}
 _LEGACY_EXITS = {'ROTATION', 'STATISTICAL_EXHAUSTION', 'CONTROL_TRANSFER'}
 

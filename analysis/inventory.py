@@ -117,7 +117,7 @@ def assess(rec, *, current_price, new_size=0.0) -> dict:
 def depletion(rec) -> dict:
     """Coarse remaining-inventory estimate (addendum #4). Approximates how much of the position was
     distributed near strength: the fraction of remembered volume printed >= INV_BASIS_ABOVE_PCT above
-    the contract's running low. Maps to LIKELY_FUNDED / LIKELY_PARTIAL_EXIT / LIKELY_MAJORITY_EXITED / LIKELY_CLOSED."""
+    the contract's running low. Maps to FUNDED / PARTIAL_EXIT / MAJORITY_EXITED / LIKELY_CLOSED."""
     prints = (rec or {}).get('prints') or []
     total = sum(p['size'] for p in prints) or 0.0
     if total <= 0:
@@ -129,7 +129,7 @@ def depletion(rec) -> dict:
     if frac >= config.INV_DEPLETE_CLOSED:
         state = 'LIKELY_CLOSED'
     elif frac >= config.INV_DEPLETE_MAJORITY:
-        state = 'LIKELY_MAJORITY_EXITED'
+        state = 'MAJORITY_EXITED'
     elif frac >= config.INV_DEPLETE_PARTIAL:
         state = 'LIKELY_PARTIAL_EXIT'
     else:

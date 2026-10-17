@@ -28,9 +28,6 @@ from analysis import campaign
 from analysis import campaign_store
 from analysis import absolute_gate
 from analysis import contract_select
-from analysis import catalyst
-from analysis import channels
-from analysis import coverage
 from analysis import dataquality
 from analysis import decision_ledger
 from analysis import decompose
@@ -65,8 +62,7 @@ from analysis.flow import FlowTracker
 from analysis.waves import WaveEngine
 from data.alpaca_client import occ_symbol
 from data.market_utils import (is_eod_window, is_market_open, is_opening_strict,
-                               is_past_entry_cutoff, is_preopen_seed, now_cst, session_minutes,
-                               today_cst)
+                               is_past_entry_cutoff, is_preopen_seed, now_cst, today_cst)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +75,6 @@ class AttentionEngine:
         self.schwab = schwab
 
         self.flow = FlowTracker()
-        self.coverage = coverage.CoverageTracker(config.COVERAGE_GAP_S, config.COVERAGE_RECOVERY_S)
         self.mass_book: dict = {}          # symbol -> mass.TickerMass
         self.waves = WaveEngine()
         self.orders = execution.OrderManager(alpaca_exec)
@@ -173,7 +168,6 @@ class AttentionEngine:
         if self._hist['date'] != today:
             self._hist['date'] = today
             self.flow.new_session(today)
-            self.coverage.reset()
             self.waves.new_session()
             self.mass_book.clear()
             self._first_price.clear()
@@ -380,7 +374,6 @@ class AttentionEngine:
     # ── the poll ────────────────────────────────────────────────────────────────
 
     def poll(self) -> None:
-        notify.flush()                    # retry any Discord card a previous outage left PENDING
         now = now_cst()
         phase = self._phase(now)
         if phase == 'closed':
@@ -483,8 +476,7 @@ class AttentionEngine:
                 if config.EXPIRY_SELECTOR_ENABLED and self._expiry_rows.get(en['ticker']):
                     sel = expiry_selector.select(
                         self._expiry_rows[en['ticker']], traded_side=en['side'],
-                        # scaled to a 390-min day so the theta ramp ends at an early close too
-                        minutes_since_open=self._minutes_since_open(now) * 390.0 / session_minutes(now))
+                        minutes_since_open=self._minutes_since_open(now))
                     if sel.get('best_dte') is not None:
                         logger.info("EXPIRY-SELECT %s %s → %s%s", en['ticker'], en['side'], sel['reason'],
                                     '' if config.EXPIRY_SELECTOR_SHADOW else ' (LIVE reroute)')
@@ -554,23 +546,9 @@ class AttentionEngine:
                 self._snaps[sym], self._spot[sym], self._expiry[sym] = snaps, spot, expiry
                 self.flow.ingest(sym, snaps, spot, now)
                 measured.append(sym)
-                inc = self.coverage.ok(sym, now.timestamp())
-                if inc:
-                    self._coverage_incident(inc, now)
             except Exception:
                 logger.warning("%s: ingest failed", sym, exc_info=True)
         return measured
-
-    def _coverage_incident(self, inc, now) -> None:
-        """A feed gap closed: the next fresh-window read spans the gap, so the ticker is DEGRADED (no new
-        entries) until windows refill. Logged, and posted once per incident as a visible notice."""
-        logger.warning("COVERAGE-INCIDENT %s no usable data for %.0fs — entries disabled for %.0fs "
-                       "while fresh-flow windows refill", inc['symbol'], inc['gap_s'], config.COVERAGE_RECOVERY_S)
-        if config.COVERAGE_NOTIFY_MIN_GAP_S and inc['gap_s'] >= config.COVERAGE_NOTIFY_MIN_GAP_S:
-            try:
-                notify.coverage_card(inc, recovery_s=config.COVERAGE_RECOVERY_S, now=now)
-            except Exception:
-                pass
 
     def _clean_snaps(self, sym, snaps, now) -> dict:
         """Addendum #11-12 data-quality pass: drop structurally-invalid contract snapshots and stash a
@@ -1025,10 +1003,8 @@ class AttentionEngine:
                             "(z=%.1f ctrl=%.2f share=%.0f%%) — HOLD, not a new entry",
                             pos['symbol'], pos['side'], m['mass_z'], ctrl, 100 * m.get('attention_share', 0.0))
                 try:
-                    notify.send(f"🟡 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
-                                f"(same-side flow reinforcing; HOLD, not a new entry)",
-                                signal_id=f"reinforce|{pos['symbol']}|{pos['side']}|"
-                                          f"{pos.get('opened_at')}|{now.isoformat()}")
+                    notify.send(f"🟢 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
+                                f"(same-side flow reinforcing; HOLD, not a new entry)")
                 except Exception:
                     pass
 
@@ -1247,7 +1223,6 @@ class AttentionEngine:
                 now=now, ticker=sym, side=side, metric=m, cand=c, decision=decision, owner=owner,
                 veto_reasons=veto_reasons, code_version=self._code_version, config_hash=self._config_hash,
                 candidate_expiry=expiry, candidate_strike=strike, entry_window=ew,
-                provenance=self._provenance_block(now, sym, expiry),
                 runtime_flags={'MULTI_CAMPAIGN': config.MULTI_CAMPAIGN_ENABLED,
                                'REVERSAL': config.REVERSAL_ENABLED,
                                'QUALIFIED_CONTROL': config.QUALIFIED_CONTROL_ENABLED,
@@ -1255,19 +1230,6 @@ class AttentionEngine:
             decision_ledger.append(config.DECISION_LEDGER_FILE, rec)
         except Exception:
             logger.warning("decision-ledger write failed (non-fatal)", exc_info=True)
-
-    def _provenance_block(self, now, sym, expiry=None) -> dict:
-        """Flow handoff §10: the point-in-time context every ledger record carries — schema/ruleset
-        version, NY session, DTE + channel, feed coverage, verified-catalyst status."""
-        exp = expiry or self._expiry.get(sym)
-        dte = channels.dte_ny(exp, now) if exp else None
-        try:
-            cat = catalyst.assess(sym, now, exp)
-        except Exception:
-            cat = {'status': 'ERROR', 'mismatch': None}
-        return {**channels.stamp(now), 'dte': dte, 'dte_bucket': channels.dte_bucket(dte),
-                'coverage': self.coverage.state(sym, now.timestamp()),
-                'catalyst_status': cat.get('status'), 'catalyst_event_mismatch': cat.get('mismatch')}
 
     def _maybe_near_miss_alert(self, sym, side, c, m, dec, now) -> None:
         """Audit item 2: RESEARCH-ONLY 🟡 WATCH alert for a genuinely-scored near-miss (no hard veto,
@@ -1310,12 +1272,7 @@ class AttentionEngine:
                                   shortfall=dec.get('shortfall'), value_state=vs,
                                   qual_control=max(qcs, ctrl or 0.0), dist_prob=c.get('dist_prob'),
                                   archetype=dec.get('archetype'), info_rank=m.get('info_mass_rank'),
-                                  acceptance=(c.get('acceptance') or {}).get('label'), top_drag=drag, now=now,
-                                  expiry=self._expiry.get(sym),
-                                  alternative=hypotheses.best_alternative(c.get('hypotheses')),
-                                  next_check=(f"whether {dec['top_drag'][0][0]} improves — the largest drag "
-                                              f"on the route score" if dec.get('top_drag') else None),
-                                  catalyst=catalyst.assess(sym, now, self._expiry.get(sym))['sentence'])
+                                  acceptance=(c.get('acceptance') or {}).get('label'), top_drag=drag, now=now)
         except Exception:
             logger.warning("near-miss alert card failed (non-fatal)", exc_info=True)
         logger.info("NEAR-MISS-WATCH %s %s %s route=%s score=%.3f/%.3f value=%s qctrl=%.2f drag=[%s] "
@@ -1345,12 +1302,6 @@ class AttentionEngine:
         if not c or not c.get('best'):
             return 'DATA_QUALITY_REJECTION'
         best = c['best']
-        # Flow handoff §3: no inference on a ticker whose feed is in a gap or still recovering from one
-        # — the fresh-flow windows behind this candidate span the gap (fake shock).
-        cov = self.coverage.state(sym, now.timestamp())
-        if config.COVERAGE_GATE_ENABLED and cov != 'HEALTHY':
-            logger.info("ENTRY-REJECT %s %s coverage=%s — feed gap/recovery, context only", sym, side, cov)
-            return 'COVERAGE_DEGRADED'
         # EntryWindow: record the premium at which the window first became actionable (for the ledger's
         # PremiumAtFirstInformationEvent vs current-poll comparison and convexity-since-open reads).
         if getattr(w, 'ew_opened_price', None) is None and best.get('mark'):
@@ -1619,7 +1570,7 @@ class AttentionEngine:
             mins = self._minutes_since_open(now)
             l0 = expiry_value.late_day_0dte_value(
                 dte0, mins, strength=post, activation=c.get('cont_prob', post),
-                remaining_convexity=remaining_convexity, session_minutes=session_minutes(now))
+                remaining_convexity=remaining_convexity)
             ok0, why0 = expiry_value.late_day_0dte_ok(l0)
             if not route_ok and not ok0:
                 logger.info("ENTRY-REJECT %s %s %s", sym, side, why0)
@@ -1778,8 +1729,7 @@ class AttentionEngine:
         notify.entry_card(self._board_ctx(ranked, market_mass), symbol=sym, side=side,
                           strike=best['strike'], expiry=expiry.isoformat(), qty=qty, price=limit,
                           row=self._board_ctx(ranked, market_mass)['by_symbol'][sym], spot=spot,
-                          mode=mode, now=now, alternative=hypotheses.best_alternative(hy),
-                          catalyst=catalyst.assess(sym, now, expiry)['sentence'])
+                          mode=mode, now=now)
         pos = self._held()[-1]
         self._sheet(lambda: self.sheets.log_trade_entry(pos, mode=mode))
         if config.OI_CONFIRM_ENABLED:      # store campaign fingerprint for T+1 OI confirmation
@@ -1787,16 +1737,9 @@ class AttentionEngine:
             oi_confirm.record_campaign(config.OI_CONFIRM_FILE, {
                 'date': now.date().isoformat(), 'symbol': sym, 'side': side, 'strike': best['strike'],
                 'cluster_center': surf.get('weighted_center'), 'cluster_breadth': surf.get('breadth'),
-                'observed_at': now.isoformat(), 'expiry': expiry.isoformat(),
-                # fresh-window and partial-day volume are NOT the reconciliation V — the full
-                # completed session volume (session_volume) is filled after the close.
-                'fresh_vol_window': best.get('fresh_vol'),
-                'cum_volume_at_entry': (self._snaps.get(sym, {}).get((best['strike'], side)) or {}).get('volume'),
-                'session_volume': None, 'fresh_premium': c['notional'],
+                'today_volume': best.get('fresh_vol'), 'fresh_premium': c['notional'],
                 'control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
-                # prior_oi = OI published for the settlement BEFORE this session (store its as-of +
-                # availability time when filled); new_oi = the next vintage. Both from Schwab when on.
-                'prior_oi': None, 'prior_oi_asof': None, 'new_oi': None, 'new_oi_asof': None})
+                'prior_oi': None})         # prior/next-day OI filled from Schwab when OI is enabled
 
     # ── position close/scale ─────────────────────────────────────────────────────
 
@@ -1977,7 +1920,6 @@ class AttentionEngine:
         logger.info("ATTRITION-REPORT route hard-veto by reason: %s", hv or '{}')
         logger.info("ATTRITION-REPORT POST-ROUTE veto (why ROUTE_PASSED did not ENTER): %s", prv or '{}')
         logger.info("ATTRITION-REPORT near-miss (0.45-0.55) by route: %s", nm or '{}')
-        logger.info("NOTIFY-OUTBOX %s", notify.outbox_stats() or '{}')   # PENDING/DEAD = delivery backlog
         try:
             notify.send(f"📊 Jakenew EOD attrition — ACTIVE {len(a['evaluated'])} → qualified "
                         f"{len(a['qualified'])} → route-passed {len(a['route_passed'])} → entered "

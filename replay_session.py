@@ -298,7 +298,7 @@ def main():
             reacc = velocity > 0 and dom_prem >= 150_000
             f = {
                 'control_ok': ctrl_share >= 0.55,
-                'opp_strong': (clus['state'] in ('REVERSAL_CLUSTER_SUSTAINED', 'REVERSAL_ACTIVATED')),
+                'opp_strong': (clus['state'] in ('REVERSAL_CLUSTER_CONFIRMED', 'REVERSAL_ACTIVATED')),
                 'dist_high': accept == 'REJECTION',
                 'progressing': not prog_fail,
                 'higher_low': hlq >= 0.5,

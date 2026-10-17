@@ -25,7 +25,7 @@ def Cand(side='CALL', accum=True, dist=1.2, resp=0.1, label='SINGLE_STRIKE_ACCUM
 a = C.assess(M(), Cand())
 ck("genuine campaign → confirmed", a['confirmed'] and not a['missing'])
 ck("confirmed campaign scores well", a['score'] >= 62)
-ck("thesis names the campaign", 'CAMPAIGN QUALIFIED' in a['thesis'])
+ck("thesis names the campaign", 'CAMPAIGN CONFIRMED' in a['thesis'])
 
 # ── each missing signal blocks the campaign and is named ──
 ck("not leading Mag-7 → not a campaign (leadership)",
