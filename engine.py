@@ -374,6 +374,7 @@ class AttentionEngine:
     # ── the poll ────────────────────────────────────────────────────────────────
 
     def poll(self) -> None:
+        notify.flush()                    # retry any Discord card a previous outage left PENDING
         now = now_cst()
         phase = self._phase(now)
         if phase == 'closed':
@@ -1003,8 +1004,10 @@ class AttentionEngine:
                             "(z=%.1f ctrl=%.2f share=%.0f%%) — HOLD, not a new entry",
                             pos['symbol'], pos['side'], m['mass_z'], ctrl, 100 * m.get('attention_share', 0.0))
                 try:
-                    notify.send(f"🟢 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
-                                f"(same-side flow reinforcing; HOLD, not a new entry)")
+                    notify.send(f"🟡 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
+                                f"(same-side flow reinforcing; HOLD, not a new entry)",
+                                signal_id=f"reinforce|{pos['symbol']}|{pos['side']}|"
+                                          f"{pos.get('opened_at')}|{now.isoformat()}")
                 except Exception:
                     pass
 
@@ -1737,9 +1740,16 @@ class AttentionEngine:
             oi_confirm.record_campaign(config.OI_CONFIRM_FILE, {
                 'date': now.date().isoformat(), 'symbol': sym, 'side': side, 'strike': best['strike'],
                 'cluster_center': surf.get('weighted_center'), 'cluster_breadth': surf.get('breadth'),
-                'today_volume': best.get('fresh_vol'), 'fresh_premium': c['notional'],
+                'observed_at': now.isoformat(), 'expiry': expiry.isoformat(),
+                # fresh-window and partial-day volume are NOT the reconciliation V — the full
+                # completed session volume (session_volume) is filled after the close.
+                'fresh_vol_window': best.get('fresh_vol'),
+                'cum_volume_at_entry': (self._snaps.get(sym, {}).get((best['strike'], side)) or {}).get('volume'),
+                'session_volume': None, 'fresh_premium': c['notional'],
                 'control': round(m['call_control'] if side == 'CALL' else m['put_control'], 3),
-                'prior_oi': None})         # prior/next-day OI filled from Schwab when OI is enabled
+                # prior_oi = OI published for the settlement BEFORE this session (store its as-of +
+                # availability time when filled); new_oi = the next vintage. Both from Schwab when on.
+                'prior_oi': None, 'prior_oi_asof': None, 'new_oi': None, 'new_oi_asof': None})
 
     # ── position close/scale ─────────────────────────────────────────────────────
 
@@ -1920,6 +1930,7 @@ class AttentionEngine:
         logger.info("ATTRITION-REPORT route hard-veto by reason: %s", hv or '{}')
         logger.info("ATTRITION-REPORT POST-ROUTE veto (why ROUTE_PASSED did not ENTER): %s", prv or '{}')
         logger.info("ATTRITION-REPORT near-miss (0.45-0.55) by route: %s", nm or '{}')
+        logger.info("NOTIFY-OUTBOX %s", notify.outbox_stats() or '{}')   # PENDING/DEAD = delivery backlog
         try:
             notify.send(f"📊 Jakenew EOD attrition — ACTIVE {len(a['evaluated'])} → qualified "
                         f"{len(a['qualified'])} → route-passed {len(a['route_passed'])} → entered "

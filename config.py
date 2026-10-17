@@ -132,6 +132,13 @@ MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '1'))
 
 # ── Notifications (optional) ─────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL', '')
+# Durable delivery outbox (notify.py): PENDING → SENT only after Discord returns a message id.
+NOTIFY_OUTBOX_DB      = os.getenv('NOTIFY_OUTBOX_DB', 'jakenew_outbox.db')
+NOTIFY_TIMEOUT_S      = float(os.getenv('NOTIFY_TIMEOUT_S', '10'))
+NOTIFY_MAX_ATTEMPTS   = int(os.getenv('NOTIFY_MAX_ATTEMPTS', '8'))      # transient failures → DEAD after this
+NOTIFY_BACKOFF_BASE_S = float(os.getenv('NOTIFY_BACKOFF_BASE_S', '5'))  # 5s, 10s, 20s ... capped
+NOTIFY_BACKOFF_MAX_S  = float(os.getenv('NOTIFY_BACKOFF_MAX_S', '300'))
+NOTIFY_FLUSH_LIMIT    = int(os.getenv('NOTIFY_FLUSH_LIMIT', '5'))       # cards per flush (bounds poll latency)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # v2 RESEARCH PARAMETERS
@@ -822,6 +829,7 @@ REINFORCE_MIN_CONF        = float(os.getenv('REINFORCE_MIN_CONF', '0.55'))  # do
 # T+1 OI campaign confirmation (research): needs Schwab OI (currently off) to fetch next-day OI.
 OI_CONFIRM_ENABLED        = os.getenv('OI_CONFIRM_ENABLED', 'false').lower() == 'true'
 OI_CONFIRM_FILE           = os.getenv('OI_CONFIRM_FILE', 'jakenew_campaigns.jsonl')
+OI_SUPPORT_RATIO          = float(os.getenv('OI_SUPPORT_RATIO', '0.50'))  # ΔOI ≥ this × full-session vol → OPENING_SUPPORTED
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NEW-SPEC P1 — CROSS-SESSION CAMPAIGN MEMORY

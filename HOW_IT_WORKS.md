@@ -1033,10 +1033,11 @@ re-entry) was already delivered by FU-P1 (CampaignConfidence). The new entry/ale
 - **Reinforcement lifecycle updates (`REINFORCE_LOG_ENABLED`, default ON).** Same-side flow resurging
   on a held position posts **CAMPAIGN STRENGTHENING** (a lifecycle note, throttled) instead of a new
   ENTER — the AMZN 12:04 $1.44M second wave is reinforcement, not a new trade.
-- **T+1 OI confirmation (`analysis/oi_confirm.py`, `OI_CONFIRM_ENABLED`, default OFF).** Stores each
-  campaign's fingerprint and a next-day classifier (NEW_POSITION_CONFIRMED / PARTIALLY / LIKELY_
-  CLOSING_CHURN / INCONCLUSIVE) — whether today's volume became real open interest. Needs Schwab OI
-  (currently off). Tests: `test_newspec.py` (14 checks). **18 test files green.**
+- **T+1 OI review (`analysis/oi_confirm.py`, `OI_CONFIRM_ENABLED`, default OFF).** Stores each
+  campaign's fingerprint and a next-day reconciliation — how much of the session's volume *can* have
+  become net new open interest. Needs Schwab OI (currently off). Tests: `test_newspec.py`.
+  *(2026-10-17 revision `oi-recon-v1`: see "OI reconciliation & Discord outbox" below — the old
+  NEW_POSITION_CONFIRMED / PARTIALLY_CONFIRMED / LIKELY_CLOSING_CHURN labels are retired.)*
 
 **New-spec §1-37 — "institutional campaign detector" priority build (NVDA/AAPL churn lessons).**
 Built in priority order, each a pure module + config + test, **all flag-gated OFF** (live posture
@@ -1224,3 +1225,49 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `PKG_VETO_MIN_CONF` | 0.75 | item 14: package hard-veto only when complex prob overwhelming |
 | `DECISION_LEDGER_ENABLED` / `DECISION_LEDGER_FILE` | true / jakenew_decisions.jsonl | item 17: per-candidate record, ALL veto reasons |
 | `BARSHOCK_TOD_ENABLED` | true *(module only)* | item 7: time-of-day baseline built+tested but NOT wired (needs multi-session history) |
+
+---
+
+## OI reconciliation & Discord outbox (2026-10-17, from the flow-handoff review)
+
+The parts of the "Logic for Jake" flow handoff that apply to this engine. The rest of that document
+(trade-level OPRA capture, condition-code maps, quote-at-print side reads, package taxonomy, `/follow`)
+belongs to a separate tape-based bot — Jakenew polls contract snapshots and never infers a print's
+aggressor side from quote location, so there was nothing there to correct.
+
+**OI reconciliation (`analysis/oi_confirm.py`, rule `oi-recon-v1`).** For one contract and two adjacent
+OI vintages, with V = the *full completed* session's volume and Δ = new OI − old OI, every traded
+contract is opening-both-sides (OO), closing-both-sides (CC) or a transfer (T): V = OO+CC+T, Δ = OO−CC.
+`oi_bounds(V, Δ)` returns the admissible ranges OO∈[max(Δ,0), ⌊(V+Δ)/2⌋], CC∈[max(−Δ,0), ⌊(V−Δ)/2⌋],
+T∈[(V−|Δ|) mod 2, V−|Δ|]. Labels are aggregate annotations, never a trader's BTO/STO:
+- `OPENING_SUPPORTED` Δ ≥ `OI_SUPPORT_RATIO` (0.50) × V · `OPENING_PARTIAL` 0 < Δ below that (was
+  "inconclusive" under 15% before) · `OPENING_WEAKENED` Δ ≤ 0 (flat OI can hide transfers; falling OI =
+  aggregate closes) · `RECONCILE_REQUIRED` |Δ| > V (missing/corrected volume, wrong vintage, exercise,
+  expiry, corporate action) · `INCONCLUSIVE` an input is missing.
+- The fingerprint no longer passes the fresh-*window* volume as V. It stores `fresh_vol_window`,
+  `cum_volume_at_entry` (partial day) and an empty `session_volume` to fill after the close, plus
+  `prior_oi_asof`/`new_oi_asof` — today's published OI belongs to the *prior* settlement and must never
+  be compared with today's partial volume. Missing V → INCONCLUSIVE, never substituted. 0DTE has no
+  next-session OI before expiry, so it gets no review.
+- `LEGACY_LABELS` maps the retired labels for old `jakenew_campaigns.jsonl` rows (rows are not rewritten).
+
+**Discord outbox (`notify.py`).** Cards were fire-and-forget: a timeout or Discord outage silently
+dropped them. Now every card is written PENDING to a sqlite outbox (`NOTIFY_OUTBOX_DB`, default
+`jakenew_outbox.db`, git-ignored) under key sha256(signal_id | state_version | evidence_hash | channel)
+*before* the webhook is called, and marked SENT only when Discord returns a message id (`?wait=true`).
+- 429 → honour `retry_after`; it holds the whole queue (order preserved) and does not use up an attempt.
+- Timeout / connection error / 5xx → exponential backoff (`NOTIFY_BACKOFF_BASE_S` 5s, capped at
+  `NOTIFY_BACKOFF_MAX_S` 300s); `NOTIFY_MAX_ATTEMPTS` (8) → DEAD. Other 4xx (bad webhook) → DEAD at once.
+- `engine.poll()` calls `notify.flush()` first every poll (≤ `NOTIFY_FLUSH_LIMIT` cards), so the backlog
+  drains after an outage or restart. The EOD attrition log prints `NOTIFY-OUTBOX {status: count}`.
+- Same key enqueued twice → one card. Trade cards (entry/scale/exit) and STRENGTHENING carry a unique
+  event id. Near-miss/flip/plain cards default to title|date + evidence hash, so an identical re-render
+  that day is suppressed and a changed card still posts.
+- Every payload sets `allowed_mentions: {parse: []}` — no card can ping @everyone/@here.
+- Research cards (near-miss, flip) carry the footer "For research only. Not investment advice. Verify
+  fills and manage your own risk." STRENGTHENING is 🟡 (watched activity), not 🟢. Green/red stays on
+  cards for the engine's own submitted (paper) orders.
+- Known limit: Discord webhooks accept no idempotency key, so a timeout *after* Discord accepted the
+  post can still produce one duplicate on retry. Everything else is retried without loss or duplication.
+- Tests: `test_notify_outbox.py` (stubbed HTTP: timeout, 429, 5xx, 404, dedupe, mention suppression).
+
