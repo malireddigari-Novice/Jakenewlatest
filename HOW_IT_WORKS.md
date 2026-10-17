@@ -1328,7 +1328,155 @@ NY time, DTE channel and one catalyst line. Near-miss (🟡 amber, research foot
 layout: facts, NY time + DTE channel, a working hypothesis with its best alternative, the **one next check**
 (the largest route-score drag), and a catalyst line. No card can ping anyone.
 
-**Not applicable to a snapshot engine** (and so not built): the print-level OPRA archive, condition-code
-maps, quote-at-print side reads, venue/ms package grouping, `/follow` private positions, and 20-session
-per-series volume baselines. They need a trade-level feed that Jakenew does not consume.
+**Trade-level parts** (print archive, condition codes, quote-at-print side reads, venue/ms packages, private
+follows, 20-session series baselines) cannot run on the snapshot engine; they live in the separate tape
+lane described next.
 Tests: `test_handoff_alignment.py`, `test_calendar.py`, `test_notify_outbox.py`, `test_newspec.py`.
+
+---
+
+## Tape lane — trade-level options-flow research collector (2026-10-17)
+
+A **separate process** (`tape_main.py`, `run_tape.bat`, package `tape/`) that runs beside the engine. It
+never places orders and never touches `jakenew_state.json`. It answers four questions and keeps them
+apart everywhere: **what printed**; **who likely took liquidity** (`LIKELY_TAKER_BUY` / `LIKELY_TAKER_SELL`
+/ `UNKNOWN`); **open/close effect** (never known from the tape, only aggregate next-session OI
+annotations); and **trade merit** (not decided, only a research outcome ledger).
+
+**Verified provider facts (Alpaca, 2026-10-17):**
+- The OPRA stream is msgpack. Authentication, explicit subscription and per-contract acknowledgements
+  were checked live for 400 contracts.
+- Historical option trades exist. Historical option **quotes do not** (404), so a print in a feed gap
+  can never get a side.
+- Trades carry **one condition letter**, an exchange code and a nanosecond time, but **no trade ID or
+  sequence**.
+- The contract master gives OI with `open_interest_date` and the multiplier. Daily bars give per-contract
+  volume.
+
+**Pipeline (`tape/pipeline.py`):** one deterministic processor for both live capture and replay.
+- **Raw archive first** (`tape/store.py`): every original message goes to
+  `tape_raw/<session>/events.jsonl` (append-only, crash-safe, gzipped at close) with a sequence number,
+  receive time, source and checksum. The state DB is `jakenew_tape.db`. Every print row carries parser,
+  condition-map and rule versions.
+- **Conditions** (`tape/conditions.py`, pinned `alpaca-opra-cond-2026-10-17`, checked against real NVDA
+  prints): tags describe mechanics only (ELECTRONIC, ISO, AUCTION, CROSS, FLOOR, COMPLEX, STOCK_TIED,
+  LATE, CANCEL, UNKNOWN). Only `I` and `S` are side-eligible. On startup the live definitions are compared
+  with the pin and any drift is logged.
+- **Side** (`tape/side.py`): uses the last quote at or before the print, ≤500 ms old, bid > 0, ask > bid,
+  width ≤ 25%, location ≥ 80% (buy) or ≤ 20% (sell). Anything else is UNKNOWN, with the reason stored.
+  Spot must be ≤ 5 s old and at or before the print.
+- **Dedup without trade IDs:** identical simultaneous fills are distinct prints. A backfill copy is
+  dropped only when it matches a streamed copy, counting multiplicity. A cancel (`A/C/E/G`) marks its
+  original CANCELLED and is kept as a CANCEL_RECORD; affected screens are rebuilt.
+- **Mechanics tags:** relative block (≥ 100 contracts and ≥ 5× series median), rapid sweep candidate
+  (≥ 250 contracts, ≥ 2 venues, ≤ 100 ms).
+- **Screens** (earned screens stay earned; a later smaller print never removes one):
+  - REL_VOLUME: ≥ 5× the 20-session median.
+  - REL_PREMIUM: ≥ 2× the name's p95 print premium.
+  - VOL_GT_OI: session volume above prior OI.
+  - QUOTE_SIDE.
+  - SHORT_DATED_OTM: 0–7 DTE with valid spot.
+  - REPEATED: ≥ 3 prints, each ≥ max(10 contracts, 20% of the median).
+
+  A UOA candidate needs two screens, including REL_VOLUME or REL_PREMIUM. Missing inputs are recorded,
+  never zero-filled.
+- **Working hypothesis** (amber): needs a healthy feed, ≥ 3 ordinary electronic prints and ≥ 500 contracts,
+  volume > 3× prior OI, one side ≥ 60% of captured volume, UNKNOWN side ≤ 25%, no package link and no
+  stock tie. The text is always conditional and names its alternatives ("put-writing is a conditional
+  opening thesis; alternative: long puts sold to close, or a package/hedge leg"). There is no
+  PROBABLE/CONFIRMED label and no single confidence number.
+- **Observation dimensions** are kept separate: rarity, linkage, side thesis, OI annotation, revisions
+  (THESIS_WEAKENED / INVALIDATED / CONVEXITY_CONTEXT_CHANGED / OI_ANNOTATION), event, urgency (DTE
+  channel), executability and coverage. Each material change is a new version in
+  `observation_versions`, and the original stays.
+- **Campaigns:** a durable `campaign_id` per issuer/expiry/right/side. Several can coexist, and a new one
+  never auto-closes an older one.
+- **Packages** (`tape/packages.py`):
+  - Windows: 1,000 ms event-time windows, ≤ 128 prints, 2–4 series of ≥ 100 contracts each, ratios
+    reduced by GCD.
+  - Exact small ratios: every part of the reduced ratio must be ≤ 10. Real NVDA data showed 1-second
+    windows summing to 668:667 by coincidence.
+  - Crowded windows are segmented by venue and tight timing, or the window abstains. One print belongs
+    to at most one package.
+  - Association grades run from A (complex tags, common venue, ≤ 10 ms) to D (time and size only).
+    D-grade packages are stored but not posted.
+  - Net side, cashflow and stock leg stay UNKNOWN. The leg-cashflow sum is shown only for opposite-side
+    legs, labelled as conditional on a verified linkage.
+- **OI** (`tape/oi.py`): interval bounds from `oi-recon-v1` using complete intervening volume.
+  "Short-call buyback plausible" (sell-side build ≥ 65%, build ≥ 50% of volume, ≥ 75% retained,
+  ≤ 14 days, buy print below that session's VWAP) is offered as an alternative only. POSSIBLE_ROLL
+  lists every competing destination. 0DTE never gets a next-session OI annotation.
+- **Cards** (`tape/cards.py`):
+  - Layout: title; NY time, DTE and channel; status; facts; one conditional read with its alternative;
+    one next check; one catalyst line; signal ID and version; disclaimer.
+  - Colours: blue for observations, amber for hypotheses, revisions and watched activity. Green/red only
+    for a user-verified fill in the private feed.
+  - Five DTE channels; a package goes to the bucket of its earliest live expiry. Routine repeats are
+    rate-limited per campaign, and material updates bypass the cooldown.
+  - Samples: `docs/TAPE_CARD_SAMPLES.md` (synthetic).
+- **Delivery:** through the existing durable outbox, using an alias per channel (`tape:zero_dte` …
+  `tape:private`). Only the alias is stored, never the webhook token, and a 429 holds only its own
+  channel. **OFF unless `TAPE_DISCORD_ENABLED=true`**; cards are always stored in the `cards` table.
+- **Private follows** (`follow.py`): a local CLI, since there is no authenticated bot.
+  - Commands: `add` (signed OCC legs, optional stop/target/catalyst), `fill` (`--verified`), `list`,
+    `remove`. Only the owner can modify a watch.
+  - Market prints on a watched leg produce a private amber card that is never assigned to the user.
+  - P/L only with signed quantities and a recorded fill.
+- **Baselines** (`tape/baseline.py`), run each morning by `tape_main.py`:
+  - Series median: the previous 20 completed sessions from daily bars, ≥ 10 sampled sessions. Sessions
+    before first observation are missing, not zero.
+  - Name p95 print premium: pooled log-bucket histograms from captured sessions, or `--bootstrap`
+    (bounded REST, about 6 minutes for 7 names × 20 sessions).
+  - Prior OI: the latest vintage dated before the session **and fetched before the print** (point in
+    time).
+  - Same-day, future or > 7-day-old baselines are rejected. Quiet builds (≥ 100 contracts over
+    5 sessions, each < 50) are kept for review.
+- **Collector** (`tape/runtime.py`):
+  - Connections: one OPRA connection plus one SIP spot connection, with explicit, acknowledged
+    subscriptions to a bounded universe. Watched contracts come first, then nearest expiries and strikes
+    round-robin up to `TAPE_MAX_CONTRACTS` (400 of 2,260 eligible on 2026-10-17); the denominator is
+    logged.
+  - Failures: stale feed (15 s), disconnect or queue overflow leads to `feed_down`, reconnect,
+    `feed_up`, then a REST trade backfill of the gap and `backfill_done` with a completeness flag. Gap
+    prints keep side UNKNOWN; their contracts are context only and a degradation card is posted.
+  - Replay: `python tape_main.py --replay <session>` rebuilds state from the archive alone.
+    `test_tape.py` proves a forced 30-second disconnect replays to the same versioned state.
+- **Review:** `python tape_report.py [session …]` reports print statuses, every side-abstention reason,
+  latency, incidents, leading-read abstentions, packages by grade, and the precommitted outcome (buy the
+  ask at observation, sell the bid at +30/+120 min, fees). It shows sample size, independent campaign
+  clusters and Wilson 95% intervals, and makes no hit-rate claim.
+
+**Measured on real data** (NVDA+AAPL, 120 contracts, 2026-10-16 via REST):
+- Throughput: 158,250 prints at 3,185 prints/s.
+- Conditions: `I` 53%, `a` (auction) 33%, `f`/`g`/`j` complex 10%, `S` 4%. A third of all prints can
+  never get a side by rule.
+- Packages: 40 candidates, mostly A-grade exact 1:1 verticals.
+
+**Configuration and deployment checklist**
+1. `pip install -r requirements.txt` (adds `msgpack`, `websockets`).
+2. Confirm the Alpaca plan's **OPRA quote-subscription limit** and connection count, then set
+   `TAPE_MAX_CONTRACTS` ≤ the limit. A non-acknowledged contract is a SUBSCRIPTION_FAILED incident.
+3. First run: `python tape_main.py --baseline-only --bootstrap` (fills the p95 history), then check the
+   `BASELINE-JOB` log line.
+4. Schedule `run_tape.bat` on weekdays at about 08:05 CT, alongside `Jakenew_DailyRun`. It exits on
+   non-trading days and after the close (+5 min).
+5. Before any Discord redistribution: obtain the provider's **written terms** for OPRA display,
+   redistribution, retention and per-user display. Then set `DISCORD_WEBHOOK_ZERO_DTE / _WEEKLY /
+   _SHORT_TERM / _SWING / _LONG_DATED` (and `_PRIVATE`) and `TAPE_DISCORD_ENABLED=true`. Keep webhooks in
+   `.env`, not in code.
+6. Optional verified catalysts: `catalysts.json` (see `analysis/catalyst.py` for the fields).
+7. After each session: `python tape_report.py <session>`. Next morning the run attaches OI annotations
+   automatically (`--annotate` does only that).
+8. Freeze thresholds before forward paper observation. `RULE_VERSION` (`tape-v1-<hash>`) changes when
+   any threshold changes and is stamped on every print row.
+
+**Remaining unknowns**
+- The account's actual OPRA quote-subscription entitlement and connection limit.
+- Live intraday message rates: quote volume for 400 contracts has not been measured during a session
+  yet.
+- Whether Alpaca's stream ever re-sends prints after a reconnect.
+- Corporate-action adjustment is flagged (root ≠ underlying or multiplier ≠ 100) but adjusted series are
+  not specially reconciled.
+- The handoff ZIP (its 43-tag list, 52 tests and fixtures) was never provided. The taxonomy and tests
+  here implement every family the handoff names, but they are not that ZIP.
+

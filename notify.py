@@ -91,12 +91,28 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS outbox (
 def _db() -> sqlite3.Connection:
     con = sqlite3.connect(config.NOTIFY_OUTBOX_DB, timeout=5)
     con.execute(_SCHEMA)
+    if 'alias' not in {r[1] for r in con.execute("PRAGMA table_info(outbox)")}:
+        con.execute("ALTER TABLE outbox ADD COLUMN alias TEXT")          # migration: pre-alias rows = 'main'
     return con
 
 
-def _channel() -> str:
+# Destination webhooks by ALIAS. The outbox stores only the alias (never a webhook token); a process
+# delivers the rows whose alias it has registered. 'main' is the engine's DISCORD_WEBHOOK_URL.
+_WEBHOOKS: dict = {}
+
+
+def register_webhook(alias: str, url: str) -> None:
+    if url:
+        _WEBHOOKS[alias] = url
+
+
+def _url(alias) -> str:
+    return config.DISCORD_WEBHOOK_URL if alias in (None, 'main') else _WEBHOOKS.get(alias, '')
+
+
+def _channel(alias: str = 'main') -> str:
     """Stable, non-secret identity of the destination webhook (never store the token itself)."""
-    return hashlib.sha256(config.DISCORD_WEBHOOK_URL.encode()).hexdigest()[:12]
+    return f"{alias}:" + hashlib.sha256(_url(alias).encode()).hexdigest()[:12]
 
 
 def idempotency_key(signal_id: str, state_version: str, evidence_hash: str, channel: str) -> str:
@@ -112,35 +128,35 @@ def _evidence_hash(payload: dict) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def enqueue(payload: dict, *, signal_id: str, state_version: str = '1') -> Optional[str]:
+def enqueue(payload: dict, *, signal_id: str, state_version: str = '1', alias: str = 'main') -> Optional[str]:
     """Persist one message as PENDING (idempotent on its key). Returns the key, or None when
-    Discord is not configured / the outbox is unwritable."""
-    if not config.DISCORD_WEBHOOK_URL:
+    that destination is not configured / the outbox is unwritable."""
+    if not _url(alias):
         return None
     payload = {**payload, 'allowed_mentions': {'parse': []}}     # never @everyone / @here / roles
     ev = _evidence_hash(payload)
-    ch = _channel()
+    ch = _channel(alias)
     key = idempotency_key(signal_id, state_version, ev, ch)
     try:
         with _db() as con:
             con.execute("INSERT OR IGNORE INTO outbox (key, signal_id, state_version, evidence_hash, "
-                        "channel, payload, status, next_attempt_at, created_at) "
-                        "VALUES (?,?,?,?,?,?,'PENDING',?,?)",
+                        "channel, payload, status, next_attempt_at, created_at, alias) "
+                        "VALUES (?,?,?,?,?,?,'PENDING',?,?,?)",
                         (key, signal_id, state_version, ev, ch, json.dumps(payload, default=str),
-                         time.time(), datetime.now().astimezone().isoformat()))
+                         time.time(), datetime.now().astimezone().isoformat(), alias))
     except Exception as exc:
         logger.warning("notify: outbox write failed (%s) — card not queued: %s", exc, signal_id)
         return None
     return key
 
 
-def _deliver_one(con, key: str, payload: str, attempts: int) -> bool:
+def _deliver_one(con, key: str, payload: str, attempts: int, url: str = None) -> bool:
     """Attempt one webhook POST and record the outcome. Returns False when the caller should stop
     this flush (rate-limited or Discord unreachable) so later cards wait their turn."""
     now = time.time()
     attempts += 1
     try:
-        r = requests.post(config.DISCORD_WEBHOOK_URL, params={'wait': 'true'},
+        r = requests.post(url or config.DISCORD_WEBHOOK_URL, params={'wait': 'true'},
                           json=json.loads(payload), timeout=config.NOTIFY_TIMEOUT_S)
     except Exception as exc:                                  # timeout / connection error: transient
         _retry_later(con, key, attempts, now, f"{type(exc).__name__}: {exc}")
@@ -187,23 +203,35 @@ def _retry_later(con, key, attempts, now, err) -> None:
 
 def flush(limit: int = None) -> int:
     """Deliver due PENDING cards oldest-first. Never raises. Returns the number of cards SENT."""
-    if not config.DISCORD_WEBHOOK_URL:
+    if not config.DISCORD_WEBHOOK_URL and not _WEBHOOKS:
         return 0
     limit = limit or config.NOTIFY_FLUSH_LIMIT
     sent = 0
     try:
         with _db() as con:
-            # A 429 rate-limits the whole webhook: hold every card until it lifts so order is kept.
-            held = con.execute("SELECT MAX(next_attempt_at) FROM outbox WHERE status='PENDING' "
-                               "AND last_error LIKE '429%'").fetchone()[0]
-            if held and held > time.time():
-                return 0
-            rows = con.execute("SELECT key, payload, attempts FROM outbox WHERE status='PENDING' "
+            now = time.time()
+            # A 429 rate-limits that whole webhook: hold every card for it until it lifts (order kept).
+            held = {a or 'main' for a, t in con.execute(
+                "SELECT alias, MAX(next_attempt_at) FROM outbox WHERE status='PENDING' "
+                "AND last_error LIKE '429%' GROUP BY alias").fetchall() if t and t > now}
+            rows = con.execute("SELECT key, payload, attempts, alias FROM outbox WHERE status='PENDING' "
                                "AND next_attempt_at<=? ORDER BY created_at LIMIT ?",
-                               (time.time(), limit)).fetchall()
-            for key, payload, attempts in rows:
-                if not _deliver_one(con, key, payload, attempts):
+                               (now, limit * 4)).fetchall()
+            n = 0
+            for key, payload, attempts, alias in rows:
+                alias = alias or 'main'
+                url = _url(alias)
+                if alias in held or not url:
+                    continue                    # rate-limited, or another process owns this destination
+                if n >= limit:
                     break
+                n += 1
+                if not _deliver_one(con, key, payload, attempts, url):
+                    con.commit()
+                    if con.execute("SELECT last_error LIKE '429%' FROM outbox WHERE key=?", (key,)).fetchone()[0]:
+                        held.add(alias)
+                        continue
+                    break                       # Discord unreachable — stop this flush
                 con.commit()
                 sent += con.execute("SELECT status='SENT' FROM outbox WHERE key=?", (key,)).fetchone()[0]
     except Exception as exc:

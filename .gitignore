@@ -42,3 +42,8 @@ bt_state.json
 jakenew_outbox.db
 
 .schwab_auth_ctx.json
+
+# Tape lane (research collector) data
+jakenew_tape.db
+tape_raw/
+replay_*.db
