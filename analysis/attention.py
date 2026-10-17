@@ -151,7 +151,7 @@ def gate_signal(board: dict, symbol: str, signal_type: str, *, score_min: float 
         return {'decision': 'DROP', 'reason': 'ATTENTION_RANK_TOO_LOW', **info}
     if require_control_agree and row.get('control_side') and row['control_side'] != want:
         return {'decision': 'DROP', 'reason': 'CONTROL_SIDE_DISAGREES', **info}
-    return {'decision': 'KEEP', 'reason': 'ATTENTION_CONFIRMED', **info}
+    return {'decision': 'KEEP', 'reason': 'ATTENTION_SUSTAINED', **info}
 
 
 def select_single_trade(candidates: list, board: dict) -> Optional[dict]:

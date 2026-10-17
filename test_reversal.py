@@ -33,8 +33,8 @@ ck("second opposite event → REVERSAL_WATCH", cl['state'] == 'REVERSAL_WATCH')
 # confirmation: cross-strike (two strikes) + premium acceptance, sustained
 cl = rv.update(cl, opp_event(217.5, cross=True), 1120)
 cl = rv.update(cl, opp_event(217.5, cross=True), 1180)
-ck("cross-strike + accepted, sustained → REVERSAL_CLUSTER_CONFIRMED",
-   cl['state'] == 'REVERSAL_CLUSTER_CONFIRMED')
+ck("cross-strike + accepted, sustained → REVERSAL_CLUSTER_SUSTAINED",
+   cl['state'] == 'REVERSAL_CLUSTER_SUSTAINED')
 # activation: incumbent progress failing
 cl = rv.update(cl, opp_event(217.5, cross=True, fail=True), 1240)
 ck("confirmed + incumbent failing → REVERSAL_ACTIVATED", cl['state'] == 'REVERSAL_ACTIVATED')

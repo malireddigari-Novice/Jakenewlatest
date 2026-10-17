@@ -1,4 +1,4 @@
-"""New-spec tests: premium acceptance + T+1 OI classifier + config locks. Run: python test_newspec.py"""
+"""New-spec tests: premium acceptance + T+1 OI reconciliation + config locks. Run: python test_newspec.py"""
 import os
 import sys
 
@@ -49,15 +49,39 @@ ev_flat = entry.evidence(cand(resp_event=-0.02), m())['response']
 ev_absorb = entry.evidence(cand(resp_event=-0.02, acceptance={'label': 'ABSORPTION', 'absorbing': True, 'score': 0.85}), m())['response']
 ck("absorption raises response evidence without appreciation", ev_absorb > ev_flat)
 
-print("── T+1 OI classifier ──")
-ck("volume→new OI → NEW_POSITION_CONFIRMED",
-   oi_confirm.classify_oi_change(prior_oi=1000, today_volume=5000, new_oi=4000) == 'NEW_POSITION_CONFIRMED')
-ck("OI flat despite big volume → LIKELY_CLOSING_CHURN",
-   oi_confirm.classify_oi_change(prior_oi=5000, today_volume=8000, new_oi=5000) == 'LIKELY_CLOSING_CHURN')
-ck("partial OI rise → PARTIALLY_CONFIRMED",
-   oi_confirm.classify_oi_change(prior_oi=1000, today_volume=5000, new_oi=2200) == 'PARTIALLY_CONFIRMED')
+print("── T+1 OI reconciliation (oi-recon-v1) ──")
+ck("volume→new OI → OPENING_SUPPORTED",
+   oi_confirm.classify_oi_change(prior_oi=1000, session_volume=5000, new_oi=4000) == 'OPENING_SUPPORTED')
+ck("OI flat despite big volume → OPENING_WEAKENED (flat can hide transfers)",
+   oi_confirm.classify_oi_change(prior_oi=5000, session_volume=8000, new_oi=5000) == 'OPENING_WEAKENED')
+ck("partial OI rise → OPENING_PARTIAL",
+   oi_confirm.classify_oi_change(prior_oi=1000, session_volume=5000, new_oi=2200) == 'OPENING_PARTIAL')
+ck("small positive OI rise is still partial (not inconclusive)",
+   oi_confirm.classify_oi_change(prior_oi=1000, session_volume=5000, new_oi=1100) == 'OPENING_PARTIAL')
 ck("missing OI → INCONCLUSIVE",
-   oi_confirm.classify_oi_change(prior_oi=None, today_volume=5000, new_oi=None) == 'INCONCLUSIVE')
+   oi_confirm.classify_oi_change(prior_oi=None, session_volume=5000, new_oi=None) == 'INCONCLUSIVE')
+ck("missing full-session volume → INCONCLUSIVE (partial volume is never substituted)",
+   oi_confirm.classify_oi_change(prior_oi=1000, session_volume=None, new_oi=3000) == 'INCONCLUSIVE')
+ck("|ΔOI| > V → RECONCILE_REQUIRED",
+   oi_confirm.classify_oi_change(prior_oi=1000, session_volume=500, new_oi=2000) == 'RECONCILE_REQUIRED')
+ck("|ΔOI| > V (falling) → RECONCILE_REQUIRED",
+   oi_confirm.classify_oi_change(prior_oi=3000, session_volume=500, new_oi=1000) == 'RECONCILE_REQUIRED')
+b = oi_confirm.oi_bounds(5000, 3000)
+ck("bounds V=5000 Δ=3000 → OO∈[3000,4000] CC∈[0,1000] T∈[0,2000]",
+   b == {'oo_min': 3000, 'oo_max': 4000, 'cc_min': 0, 'cc_max': 1000, 't_min': 0, 't_max': 2000})
+b = oi_confirm.oi_bounds(7, -2)
+ck("bounds V=7 Δ=-2 → OO∈[0,2] CC∈[2,4] T∈[1,5] (parity)",
+   b == {'oo_min': 0, 'oo_max': 2, 'cc_min': 2, 'cc_max': 4, 't_min': 1, 't_max': 5})
+ck("bounds are internally consistent (OO−CC=Δ, OO+CC+T=V at the extremes)",
+   all((bb['oo_min'] - bb['cc_min'] == d) and (bb['oo_min'] + bb['cc_min'] + bb['t_max'] == v)
+       and (bb['oo_max'] - bb['cc_max'] == d) and (bb['oo_max'] + bb['cc_max'] + bb['t_min'] == v)
+       for v in range(0, 30) for d in range(-v, v + 1) for bb in [oi_confirm.oi_bounds(v, d)]))
+ck("oi_bounds |Δ|>V → None", oi_confirm.oi_bounds(10, 11) is None)
+ck("reconcile record carries rule_version",
+   oi_confirm.reconcile(1000, 5000, 4000)['rule_version'] == oi_confirm.RULE_VERSION)
+ck("legacy labels map to bounded replacements",
+   oi_confirm.LEGACY_LABELS['NEW_POSITION_CONFIRMED'] == 'OPENING_SUPPORTED'
+   and oi_confirm.LEGACY_LABELS['LIKELY_CLOSING_CHURN'] == 'OPENING_WEAKENED')
 
 print("── config locks present ──")
 ck("DAILY_ENTRY_LOCK_ENABLED is a bool", isinstance(config.DAILY_ENTRY_LOCK_ENABLED, bool))

@@ -5,7 +5,7 @@ A single opposite-side print must NOT flip a position. Opposite flow accumulates
 persistent cluster that remembers events across time (the NVDA 215C @ 11:02 and 217.5C @ 11:43 belong
 to one developing call reversal even 41 minutes apart):
 
-    NONE → OPPOSITE_FLOW_DETECTED → REVERSAL_WATCH → REVERSAL_CLUSTER_CONFIRMED → REVERSAL_ACTIVATED
+    NONE → OPPOSITE_FLOW_DETECTED → REVERSAL_WATCH → REVERSAL_CLUSTER_SUSTAINED → REVERSAL_ACTIVATED
 
 Only at REVERSAL_ACTIVATED does the incumbent leave. And EXIT ≠ REVERSE (safeguard #10, the most
 important addition): opposite flow can invalidate the incumbent (EXIT to flat) without being strong
@@ -13,7 +13,7 @@ enough to ENTER the opposite side. Three outcomes: HOLD / EXIT_FLAT / EXIT_REVER
 """
 import config
 
-STATES = ('NONE', 'OPPOSITE_FLOW_DETECTED', 'REVERSAL_WATCH', 'REVERSAL_CLUSTER_CONFIRMED',
+STATES = ('NONE', 'OPPOSITE_FLOW_DETECTED', 'REVERSAL_WATCH', 'REVERSAL_CLUSTER_SUSTAINED',
           'REVERSAL_ACTIVATED')
 
 
@@ -44,6 +44,8 @@ def update(cluster: dict, ev: dict, now) -> dict:
     else:
         cluster['confirm_evals'] = max(0, cluster['confirm_evals'] - 1)   # decay without fresh evidence
 
+    if cluster['state'] == 'REVERSAL_CLUSTER_CONFIRMED':    # legacy label from a pre-rename state file
+        cluster['state'] = 'REVERSAL_CLUSTER_SUSTAINED'
     st = cluster['state']
     if st == 'NONE':
         if opp_evt:
@@ -61,8 +63,8 @@ def update(cluster: dict, ev: dict, now) -> dict:
                    and ev.get('opp_premium_accept'))
         cluster['confirm_evals'] = cluster['confirm_evals'] + 1 if confirm else max(0, cluster['confirm_evals'] - 1)
         if cluster['confirm_evals'] >= config.REV_CONFIRM_EVALS:
-            cluster['state'] = 'REVERSAL_CLUSTER_CONFIRMED'
-    elif st == 'REVERSAL_CLUSTER_CONFIRMED':
+            cluster['state'] = 'REVERSAL_CLUSTER_SUSTAINED'
+    elif st == 'REVERSAL_CLUSTER_SUSTAINED':
         # activation needs the incumbent to actually be failing OR the opposite to seize real control
         if ev.get('incumbent_progress_fail') or (ev.get('opp_control', 0.0) or 0.0) >= config.REV_ACTIVATE_CONTROL:
             cluster['state'] = 'REVERSAL_ACTIVATED'

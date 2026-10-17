@@ -2,3 +2,5 @@ python-dotenv>=1.0.1
 pytz>=2024.1
 requests>=2.31.0
 schwab-py>=1.4.0
+msgpack>=1.0.8
+websockets>=12.0

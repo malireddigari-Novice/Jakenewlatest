@@ -31,6 +31,7 @@ import requests
 import config
 config.DISCORD_WEBHOOK_URL = ''          # never post
 config.STATE_FILE = 'bt_state.json'      # throwaway, reset each day (isolate days)
+config.COVERAGE_GAP_S = 150               # 1-min replay cadence: one missing bar-minute is not a gap
 import notify
 import state as _state
 _state.save = lambda *a, **k: None       # no disk persistence during replay (in-memory only)
