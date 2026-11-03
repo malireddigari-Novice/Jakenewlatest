@@ -27,7 +27,13 @@ SNAPSHOT ADAPTER DEFINITIONS (§21 — documented, not inferred from the source 
   value refs   prior-session 1-min bar closes + today's observed prints, trade basis; event premium = the
                window's newest print (trade basis); acceptance uses quote mids at the window bounds
   underlying   engine rule dS over CF_UNDERLYING_WINDOW_S; bullish if > 0, bearish if < 0 (flat confirms neither)
-  sync         share of contracts whose quote is <= CF_QUOTE_MAX_AGE_S old >= CF_SYNC_MIN_FRESH_FRAC
+  sync         share of contracts whose quote is <= CF_QUOTE_MAX_AGE_S old and not future-dated (beyond
+               CF_QUOTE_CLOCK_TOL_S) >= CF_SYNC_MIN_FRESH_FRAC
+  poll ts      the local RECEIPT time of the ticker's last snapshot response (`timing.recv_ts`), never the
+               poll-cycle start: tickers are fetched sequentially, so a cycle-start stamp precedes quotes that
+               arrived up to ~30 s later and makes them look future-dated. `timing` keeps the cycle start,
+               fetch start, receipt and server HTTP Date for audit; quotes that still lead the receipt time
+               are counted (`future_quotes`, `max_quote_lead_s`) and journaled as QUOTE_TIMING
 """
 import logging
 from collections import defaultdict, deque
@@ -37,6 +43,7 @@ from campaign_flow import board as boardmod
 from campaign_flow import calendar_ny as cal
 from campaign_flow import cards
 from campaign_flow import clusters
+from campaign_flow import conviction
 from campaign_flow import oi_ref
 from campaign_flow import settings as S
 from campaign_flow import shock
@@ -81,6 +88,10 @@ class Pipeline:
         self._legacy = {}                           # ticker -> legacy scores at the latest poll
         self._last_board = None
         self._last_poll = {}                        # ticker -> ts of the last processed poll
+        self._timing_logged = {}                    # ticker -> slot of the last QUOTE_TIMING journal row
+        self._conv = {}                             # ticker -> conviction.assess() at the latest evaluation
+        self._side_hist = defaultdict(list)         # (ticker, right) -> [(window end, near-money volume)] today
+        self._range = {}                            # ticker -> [session high, session low] of observed spot
         self.rebuilding = False                     # True while replaying the session log after a restart
 
     # ── session ────────────────────────────────────────────────────────────────
@@ -91,8 +102,10 @@ class Pipeline:
             for x in (self._samples, self._items, self._spot, self._refs):
                 x.clear()
             for x in (self._slot, self._snapshot, self._quotes, self._listing, self._baseline,
-                      self._daily_base, self._legacy, self._prior_close, self._last_poll):
+                      self._daily_base, self._legacy, self._prior_close, self._last_poll, self._conv,
+                      self._side_hist, self._range):
                 x.clear()
+            self.router.reconcile_prior_sessions(d, ts)
 
     def feed(self, ob: dict) -> None:
         self._roll(ob['ts'])
@@ -145,6 +158,8 @@ class Pipeline:
             return
         self._last_poll[t] = ts
         self._spot[t].append((ts, ob['spot']))
+        rg = self._range.setdefault(t, [ob['spot'], ob['spot']])
+        rg[0], rg[1] = max(rg[0], ob['spot']), min(rg[1], ob['spot'])
         while self._spot[t] and ts - self._spot[t][0][0] > 600:
             self._spot[t].popleft()
         self._legacy[t] = ob.get('legacy') or {}
@@ -154,7 +169,7 @@ class Pipeline:
         if prev_slot is not None and slot != prev_slot:
             closed = self._close_windows(t, prev_slot)
         self._slot[t] = slot
-        fresh, n = 0, 0
+        fresh, n, future, lead = 0, 0, 0, None
         for occ, c in ob['contracts'].items():
             con = mkcontract(t, c['right'], c['strike'], c['expiry'], c.get('adj', ''), c.get('multiplier', 100))
             key = series_key(con)
@@ -174,9 +189,19 @@ class Pipeline:
                                  'ask_size': c.get('ask_size'), 'ts': c.get('quote_ts'), 'feed': ob.get('feed'),
                                  'contract': con, 'day_volume': c.get('cum_volume')}
             n += 1
-            if c.get('quote_ts') is not None and 0 <= ts - c['quote_ts'] <= S.QUOTE_MAX_AGE_S:
-                fresh += 1
-        self._snapshot[t] = self._build_snapshot(t, ob, ts, fresh, n)
+            if c.get('quote_ts') is not None:
+                age = ts - c['quote_ts']
+                lead = -age if lead is None else max(lead, -age)
+                if age < -S.QUOTE_CLOCK_TOL_S:
+                    future += 1
+                elif age <= S.QUOTE_MAX_AGE_S:
+                    fresh += 1
+        self._snapshot[t] = self._build_snapshot(t, ob, ts, fresh, n, future, lead)
+        if future and not self.rebuilding and self._timing_logged.get(t) != slot:
+            self._timing_logged[t] = slot                 # at most one row per ticker per window slot
+            self.j.log(ts, 'QUOTE_TIMING', {'future_quotes': future, 'contracts': n,
+                                            'max_quote_lead_s': round(lead, 3), 'timing': ob.get('timing')},
+                       ticker=t)
         if closed:
             self._evaluate(t, ts, closed)
         if not self.rebuilding:                     # a rebuild never decides, talks to the broker or fills marks
@@ -184,7 +209,7 @@ class Pipeline:
             self._marks(ts)
             self._sync_orders(ts)
 
-    def _build_snapshot(self, t, ob, ts, fresh, n) -> dict:
+    def _build_snapshot(self, t, ob, ts, fresh, n, future=0, lead=None) -> dict:
         exps = [str(e) for e in ob.get('expiries') or []]
         rights, complete = {}, bool(exps)
         have = defaultdict(lambda: {'C': set(), 'P': set()})
@@ -199,7 +224,9 @@ class Pipeline:
         return {'ticker': t, 'available_ts': ts, 'feed_ids': [ob.get('feed')],
                 'coverage': {'expirations': exps, 'rights': rights, 'strikes_complete': complete,
                              'trade_quote_synced': n > 0 and fresh / n >= S.SYNC_MIN_FRESH_FRAC,
-                             'evidence': {'fresh_quotes': fresh, 'contracts': n}},
+                             'evidence': {'fresh_quotes': fresh, 'contracts': n, 'future_quotes': future,
+                                          'max_quote_lead_s': None if lead is None else round(lead, 3),
+                                          'ts_basis': (ob.get('timing') or {}).get('basis', 'UNRECORDED')}},
                 'underlying': u, 'oi_context': self.j.freeze(t, self.session)}
 
     def _underlying(self, t, ts) -> dict:
@@ -327,6 +354,15 @@ class Pipeline:
                                           'complex_status': w['complex_status'], 'qual': q, 'turnover': res},
                            ticker=t, ref=w['id'])
         self._items[t] = items
+        spot = self._spot[t][-1][1] if self._spot[t] else None
+        b = cal.bounds(cal.ny_day(ts))
+        for right in ('C', 'P'):
+            for (st, en), tot in conviction.slot_totals(new_windows, right, spot).items():
+                if b and st >= b[0]:                # regular-session windows only (pre-open polls carry no flow)
+                    self._side_hist[(t, right)].append((en, tot['vol']))
+        cut = ts - S.CONV_SPAN_S
+        self._conv[t] = conviction.assess(items, ts, spot, {r: [v for e, v in self._side_hist[(t, r)] if e < cut]
+                                                            for r in ('C', 'P')})
         snap = self._snapshot.get(t)
         a = clusters.assess(snap, items, ts)
         self._states = {**getattr(self, '_states', {}), t: a['state']}
@@ -351,11 +387,12 @@ class Pipeline:
 
     # ── candidates ─────────────────────────────────────────────────────────────
     def _choices(self, t, cl_list, right):
-        strikes = {float(k) for cl in cl_list for k in cl['strikes']}
+        """Contracts at the clusters' own (expiration, strike): a cluster never selects another expiration."""
+        keys = {(str(cl['expiry']), float(k)) for cl in cl_list for k in cl['strikes']}
         out = []
         for occ, q in self._quotes.items():
             c = q['contract']
-            if c['ticker'] == t and c['right'] == right and float(c['strike']) in strikes:
+            if c['ticker'] == t and c['right'] == right and (str(c['expiry']), float(c['strike'])) in keys:
                 out.append({'contract': c, 'quote': {k: q[k] for k in ('bid', 'ask', 'bid_size', 'ask_size', 'ts', 'feed')},
                             'day_volume': q.get('day_volume'), 'oi': None, 'utility': None})
         return out
@@ -367,10 +404,37 @@ class Pipeline:
     def _consumed(self) -> set:
         return {x for c in self.j.campaigns() for x in c.get('cluster_ids') or []}
 
+    def _horizon(self, t, ts, cls) -> tuple:
+        """(horizon, clusters) for one side. When the nearest observed expiration expires today, flow in a
+        LATER expiration is overnight positioning: proposed as OVERNIGHT only when the carry rule holds
+        (CF_OVERNIGHT_*), otherwise journaled (OVERNIGHT_NOT_TAKEN) and not traded. Same-day flow, and every
+        cluster on a day whose nearest expiration is tomorrow's (Tue/Thu), keeps the default horizon."""
+        exps = (self._snapshot.get(t) or {}).get('coverage', {}).get('expirations') or []
+        later = [cl for cl in cls if str(cl['expiry']) > self.session]
+        if not S.OVERNIGHT_ENABLED or not later or self.session not in [str(e) for e in exps]:
+            return S.DEFAULT_HORIZON, cls
+        today = [cl for cl in cls if str(cl['expiry']) <= self.session]
+        if today:
+            return S.DEFAULT_HORIZON, today
+        why = []
+        if cal.ny_dt(ts).strftime('%H:%M') < S.OVERNIGHT_FROM_NY:
+            why.append('OVERNIGHT_BEFORE_WINDOW')
+        op = self.j.opening(t, self.session)
+        rg = self._range.get(t)
+        if not op or not rg:
+            why.append('OVERNIGHT_RANGE_UNKNOWN')
+        elif (rg[0] - rg[1]) / float(op['price']) > S.OVERNIGHT_MAX_RANGE_PCT:
+            why.append('OVERNIGHT_DAY_NOT_CONSOLIDATED')
+        if why:
+            self.j.log(ts, 'OVERNIGHT_NOT_TAKEN', {'reasons': why, 'expiries': sorted({c['expiry'] for c in later}),
+                                                   'range': rg, 'open': (op or {}).get('price')}, ticker=t)
+            return None, []
+        return 'OVERNIGHT', later
+
     def _candidates(self, t, ts, a, snap):
         consumed = self._consumed()
         for right, direction in (('C', 'BULLISH'), ('P', 'BEARISH')):
-            cls = a['clusters'][right]
+            horizon, cls = self._horizon(t, ts, a['clusters'][right])
             if not cls:
                 continue
             ids = [self._cluster_id(t, direction, cl) for cl in cls]
@@ -383,7 +447,8 @@ class Pipeline:
                     'items': self._items[t], 'choices': self._choices(t, cls, right),
                     'route_score': lg.get('route_score'), 'attention_score': lg.get('attention_score'),
                     'stock_price': self._spot[t][-1][1] if self._spot[t] else None,
-                    'upstream_vetoes': [], 'evidence_times': [snap['available_ts']], 'cluster_ids': ids}
+                    'upstream_vetoes': [], 'evidence_times': [snap['available_ts']], 'cluster_ids': ids,
+                    'horizon': horizon, 'conviction': (self._conv.get(t) or {}).get(right)}
             prior = self.j.event(eid)
             if prior and prior.get('decision') == 'PROPOSE':
                 continue                                   # this cluster already produced its proposal
@@ -408,14 +473,15 @@ class Pipeline:
             if src['ticker'] != t or not d or src.get('rotation_entry'):
                 continue
             right = 'C' if d == 'BULLISH' else 'P'
-            cls = a['clusters'][right]
+            horizon, cls = self._horizon(t, ts, a['clusters'][right])
             eid = stable_id('rot', src['campaign_id'], ts)
             cand = {'event_id': eid, 'ts': ts, 'ticker': t, 'direction': d, 'snapshot': snap,
                     'items': self._items[t], 'choices': self._choices(t, cls, right) if cls else [],
                     'route_score': (self._legacy.get(t) or {}).get('route_score'),
                     'stock_price': self._spot[t][-1][1] if self._spot[t] else None,
                     'source_campaign_id': src['campaign_id'], 'evidence_times': [snap['available_ts']],
-                    'cluster_ids': [self._cluster_id(t, d, cl) for cl in cls]}
+                    'cluster_ids': [self._cluster_id(t, d, cl) for cl in cls], 'horizon': horizon,
+                    'conviction': (self._conv.get(t) or {}).get(right)}
             r = self.router.propose(cand)
             if r.get('decision') == 'PROPOSE':
                 src['rotation_entry'] = r['campaign_id']
@@ -440,7 +506,7 @@ class Pipeline:
                    'snapshot': snap, 'items': self._items[t],
                    'prior_close': (pc or {}).get('price'),
                    'open_price': (op or {}).get('price') if op and float(op['available_ts']) <= ts else None,
-                   'open_time': (op or {}).get('open_ts')}
+                   'open_time': (op or {}).get('open_ts'), 'conviction': self._conv.get(t)}
             was_pending = bool(c.get('exit_pending'))
             r = self.router.manage(obs)
             if r['decision'] in ('EXIT_REQUEST', 'EXIT_PENDING_EXECUTABLE_QUOTE') and not was_pending:
@@ -486,8 +552,10 @@ class Pipeline:
         except cards.CardError as exc:
             self.j.log(ts, 'CARD_REJECTED', {'label': label, 'error': str(exc)}, ticker=c['ticker'], ref=cid)
             return
-        public = (S.MODE == 'PAPER' and S.DISCORD_ENABLED and source != 'SIM' and self.publish is not None)
-        if self.j.put_card(card_id, cid, label, ts, payload, published=public) and public:
+        public = (S.MODE == 'PAPER' and S.DISCORD_ENABLED and source != 'SIM' and self.publish is not None
+                  and (label.endswith('FILLED') or S.PUBLISH_PROPOSED))
+        sheet = {'price': price, 'qty': qty, 'remaining': remaining, 'avg': avg, 'reasons': reasons}
+        if self.j.put_card(card_id, cid, label, ts, {**payload, 'sheet': sheet}, published=public) and public:
             self.publish(payload, card_id)
 
     def _schedule_marks(self, ref, occ, ts, ask, kind):

@@ -14,6 +14,7 @@ import math
 from campaign_flow import calendar_ny as cal
 from campaign_flow import clusters
 from campaign_flow import contracts
+from campaign_flow import conviction
 from campaign_flow import settings as S
 from campaign_flow.model import direction_right, opposite, stable_id
 
@@ -21,7 +22,7 @@ OPEN_STATES = ('PROPOSED', 'ACTIVE', 'ENTRY_PENDING')
 
 
 def quote_usable_for_exit(q: dict, now_ts: float) -> bool:
-    if not q or q.get('ts') is None or float(q['ts']) > now_ts:
+    if not q or q.get('ts') is None or float(q['ts']) > now_ts + S.QUOTE_CLOCK_TOL_S:
         return False
     return (now_ts - float(q['ts']) <= S.EXIT_QUOTE_MAX_AGE_S and (q.get('bid') or 0) > 0
             and (q.get('bid_size') or 0) >= 1)
@@ -40,6 +41,48 @@ class Router:
             used += c['outstanding_entry_qty'] * c['proposal_ask'] * m
             used += c['held_qty'] * (c['avg_entry'] or c['proposal_ask']) * m
         return round(used, 2)
+
+    def entries_today(self, session: str, direction: str, ticker: str = None) -> int:
+        """Entries that count toward the daily call/put cap: every campaign opened this session in this
+        direction that still reserves or reached a fill (a proposal cancelled unfilled does not count)."""
+        return sum(1 for c in self.j.campaigns() if c['session'] == session and c['direction'] == direction
+                   and (ticker is None or c['ticker'] == ticker)
+                   and not (c['state'] == 'CANCELLED' and not c['entry_filled_qty']))
+
+    def overnight_premium(self) -> float:
+        return round(sum(c['reservation'] for c in self.j.campaigns(OPEN_STATES)
+                         if c.get('horizon') == 'OVERNIGHT'), 2)
+
+    def reconcile_prior_sessions(self, session: str, ts: float) -> list:
+        """At a new session: an earlier session's unfilled entry remainder is long cancelled (order TTL), and a
+        campaign whose contract has already expired can no longer be managed (the process was down through its
+        deadline). Close both in the journal so they stop reserving capacity; RECONCILIATION_EXCEPTION records
+        what happened. A campaign still holding a live contract (an overnight carry) is left to management."""
+        done = []
+        for c in self.j.campaigns(OPEN_STATES):
+            if c['session'] >= session:
+                continue
+            before = c['state']
+            if c['outstanding_entry_qty'] > 0:
+                c['outstanding_entry_qty'] = 0
+                if c['entry_filled_qty'] == 0:
+                    c['state'] = 'CANCELLED'
+                elif c['held_qty'] == 0:
+                    self._close(c, ts)
+            if c['held_qty'] > 0 and str(c['contract']['expiry']) < session:
+                c['unmanaged_expiry'] = {'held_qty': c['held_qty'], 'ts': ts}
+                c['held_qty'] = 0
+                self._close(c, ts)
+            if c['state'] != before or c.get('unmanaged_expiry'):
+                self.j.put_campaign(c)
+                self.j.log(ts, 'RECONCILIATION_EXCEPTION', {
+                    'reasons': ['PRIOR_SESSION_CAMPAIGN_RECONCILED'] + (
+                        ['CONTRACT_EXPIRED_WHILE_UNMANAGED'] if c.get('unmanaged_expiry') else []),
+                    'from_state': before, 'to_state': c['state'], 'campaign_session': c['session'],
+                    'expiry': c['contract']['expiry'], 'unmanaged_expiry': c.get('unmanaged_expiry')},
+                    ticker=c['ticker'], ref=c['campaign_id'])
+                done.append(c['campaign_id'])
+        return done
 
     # ── §8 entry ──────────────────────────────────────────────────────────────
     def propose(self, cand: dict) -> dict:
@@ -84,6 +127,12 @@ class Router:
             reasons.append('OPPOSITE_CAMPAIGN_OPEN_ROTATION_PATH_ONLY')
         if self.j.proposals(t, session) >= S.MAX_PROPOSALS_PER_TICKER_DAY:
             reasons.append('DAILY_ENTRY_PROPOSAL_CAP')
+        if S.MAX_ENTRIES_PER_RIGHT_DAY and self.entries_today(
+                session, direction, t if S.ENTRY_CAP_SCOPE == 'TICKER' else None) >= S.MAX_ENTRIES_PER_RIGHT_DAY:
+            reasons.append('DAILY_CALL_PUT_ENTRY_CAP')
+        conv = cand.get('conviction')
+        if S.CONV_ENABLED and not conviction.at_least(conv, conviction.CONFIRMED):
+            reasons.append(f"CONVICTION_NOT_CONFIRMED:{(conv or {}).get('tier', 'UNAVAILABLE')}")
         qty = 0
         if best is not None:
             ask = float(best['quote']['ask'])
@@ -94,13 +143,16 @@ class Router:
                 reasons.append('NONPOSITIVE_PLANNED_QUANTITY')
             elif qty * ask * m > room + 1e-9:
                 reasons.append('INSUFFICIENT_RESERVED_PREMIUM_CAPACITY')
+            elif horizon == 'OVERNIGHT' and self.overnight_premium() + qty * ask * m > S.OVERNIGHT_MAX_PREMIUM + 1e-9:
+                reasons.append('OVERNIGHT_PREMIUM_CAP')
         rs = cand.get('route_score')
         if rs is not None and rs < S.OLD_ROUTE_BOUNDARY:
             logs.append('VERIFIED_CLUSTER_BELOW_SCORE_BOUNDARY')
         record = {'event_id': cand['event_id'], 'ts': ts, 'ticker': t, 'direction': direction,
                   'state': a['state'], 'assessment': _brief(a), 'contract_journal': sel['journal'],
                   'ranking': sel['ranking'], 'route_score': rs, 'attention_score': cand.get('attention_score'),
-                  'old_boundary': S.OLD_ROUTE_BOUNDARY, 'logs': logs}
+                  'old_boundary': S.OLD_ROUTE_BOUNDARY, 'logs': logs, 'source_campaign_id': src,
+                  'horizon': horizon, 'conviction': conv}
         if reasons:
             record.update(decision='WATCH', reasons=sorted(set(reasons), key=reasons.index))
             self.j.log(ts, 'CANDIDATE_WATCH', record, ticker=t, ref=cand['event_id'])
@@ -121,7 +173,8 @@ class Router:
                 'planned_qty': qty, 'outstanding_entry_qty': qty, 'held_qty': 0, 'entry_filled_qty': 0,
                 'entry_cost': 0.0, 'avg_entry': None, 'first_entry_ts': None, 'exit_filled_qty': 0,
                 'realized': 0.0, 'exit_pending': None, 'source_campaign_id': src, 'entry_spot': stock,
-                'clusters': a['clusters'], 'cluster_ids': cand.get('cluster_ids') or [], 'marks': {}, 'reservation': round(qty * best['quote']['ask'] * m, 2)}
+                'clusters': a['clusters'], 'cluster_ids': cand.get('cluster_ids') or [], 'marks': {}, 'reservation': round(qty * best['quote']['ask'] * m, 2),
+                'entry_conviction': conv}
         self.j.put_campaign(camp)
         self.j.bump_proposals(t, session)
         record.update(decision='PROPOSE', campaign_id=cid, contract=best['contract'], qty=qty,
@@ -256,7 +309,8 @@ class Router:
                                      'event_id': obs['event_id'],
                                      'rotation_direction': opposite(c['direction']) if rot else None}
                 self.j.log(ts, 'EXIT_DECISION', {'campaign_id': c['campaign_id'], 'reasons': reasons,
-                                                 'logs': logs, 'held': c['held_qty']},
+                                                 'logs': logs, 'held': c['held_qty'],
+                                                 'conviction': obs.get('conviction'), 'marks': c.get('marks')},
                            ticker=c['ticker'], ref=c['campaign_id'])
         self.j.put_campaign(c)
         if not reasons:
@@ -271,7 +325,7 @@ class Router:
 
     def _marks(self, c, q, ts):
         bid = q.get('bid')
-        if bid is None or q.get('ts') is None or float(q['ts']) > ts:
+        if bid is None or q.get('ts') is None or float(q['ts']) > ts + S.QUOTE_CLOCK_TOL_S:
             return
         m = c.setdefault('marks', {})
         m['peak_bid'] = max(m.get('peak_bid') or bid, bid)
@@ -284,12 +338,25 @@ class Router:
     def _triggers(self, c, obs, ts, logs) -> list:
         r = []
         bull = c['direction'] == 'BULLISH'
-        # 1. favorable overnight underlying gap
+        conv = obs.get('conviction') or {}
+        own, opp_side = conv.get(c['right']), conv.get('P' if bull else 'C')
+        q = obs.get('quote') or {}
+        # 1. overnight underlying gap at the first open after entry (favorable: sell all; adverse: carry review)
         op, pc, ot = obs.get('open_price'), obs.get('prior_close'), obs.get('open_time')
         if op is not None and pc is not None and ot is not None and c['first_entry_ts'] < float(ot) <= ts:
             g = S.GAP_MIN_FRACTION
             if (bull and op > pc * (1 + g)) or (not bull and op < pc * (1 - g)):
                 r.append('FAVORABLE_REGULAR_SESSION_OPEN_GAP_SELL_ALL')
+            elif (bull and op <= pc * (1 - S.OVERNIGHT_MAX_ADVERSE_GAP)) or \
+                    (not bull and op >= pc * (1 + S.OVERNIGHT_MAX_ADVERSE_GAP)):
+                r.append('ADVERSE_OPEN_GAP_CARRY_REVIEW')
+            elif ts >= float(ot) + S.OVERNIGHT_REVIEW_S and not c.get('open_review_done'):
+                # the carried thesis must show continuation by open + review time: own side at least BUILDING,
+                # or the position already in profit; otherwise it is closed (same conviction logic as entries)
+                c['open_review_done'] = {'ts': ts, 'own': own and {k: own[k] for k in ('tier', 'score')}}
+                in_profit = quote_usable_for_exit(q, ts) and c.get('avg_entry') and q['bid'] > c['avg_entry']
+                if not in_profit and not conviction.at_least(own, conviction.BUILDING):
+                    r.append('OVERNIGHT_OPEN_REVIEW_NO_CONTINUATION')
         # 2. planned / expiration deadline
         if ts >= min(c['planned_end'], cal.expiry_deadline(c['contract']['expiry'])):
             r.append('PLANNED_OR_EXPIRY_EXIT_DEADLINE')
@@ -300,11 +367,19 @@ class Router:
         if lvl is not None and px is not None and (brk.get('evidence') or {}).get('rule'):
             if (bull and brk.get('bearish') and px <= lvl) or (not bull and brk.get('bullish') and px >= lvl):
                 r.append('PRECOMMITTED_UNDERLYING_INVALIDATION')
-        lim, q = rp.get('premium_loss_limit'), obs.get('quote') or {}
+        lim = rp.get('premium_loss_limit')
         if lim is not None and c.get('avg_entry') and quote_usable_for_exit(q, ts):
             if q['bid'] <= c['avg_entry'] * (1 - lim):
                 r.append('PRECOMMITTED_PREMIUM_RISK_LIMIT')
-        # 4. confirmed opposite-side rotation (management flow after THIS campaign's entry only)
+        # 4. trailing stop from the peak once the position has run (gives a winner room; protects the gain)
+        mk, avg = c.get('marks') or {}, c.get('avg_entry')
+        if S.TRAIL_ARM_GAIN and avg and mk.get('peak_bid') and quote_usable_for_exit(q, ts) \
+                and mk['peak_bid'] >= avg * (1 + S.TRAIL_ARM_GAIN):
+            floor = mk['peak_bid'] - S.TRAIL_GIVEBACK * (mk['peak_bid'] - avg)
+            if q['bid'] <= floor:
+                r.append('TRAILING_STOP_FROM_PEAK')
+        # 5. confirmed opposite-side rotation (management flow after THIS campaign's entry only). With conviction
+        # on, the opposite side must be CONFIRMED with a score above the entry bar (hysteresis), after MIN_HOLD_S.
         if obs.get('snapshot') is not None and obs.get('items') is not None:
             a = clusters.assess(obs['snapshot'], obs['items'], ts, since_ts=c['first_entry_ts'])
             want = clusters.BEAR if bull else clusters.BULL
@@ -313,10 +388,17 @@ class Router:
             elif a['state'] == want:
                 opp = a['clusters']['P' if bull else 'C']
                 ft = [clusters.followthrough(obs['items'], cl, ts) for cl in opp]
-                if any(f['satisfied'] for f in ft):
-                    r.append('CONFIRMED_OPPOSITE_CLUSTER_ROTATION')
-                else:
+                bar = S.CONV_CONFIRMED_SCORE * S.EXIT_CONV_HYSTERESIS
+                if not any(f['satisfied'] for f in ft):
                     logs.append('ROTATION_AWAITING_INDEPENDENT_FOLLOWTHROUGH')
+                elif S.CONV_ENABLED and not (conviction.at_least(opp_side, conviction.CONFIRMED)
+                                             and opp_side['score'] >= bar):
+                    logs.append(f"ROTATION_BELOW_EXIT_CONVICTION:{(opp_side or {}).get('tier', 'UNAVAILABLE')}"
+                                f":{(opp_side or {}).get('score')}<{bar:g}")
+                elif S.CONV_ENABLED and ts - c['first_entry_ts'] < S.MIN_HOLD_S:
+                    logs.append('ROTATION_WITHIN_MIN_HOLD')
+                else:
+                    r.append('CONFIRMED_OPPOSITE_CLUSTER_ROTATION')
         return r
 
 

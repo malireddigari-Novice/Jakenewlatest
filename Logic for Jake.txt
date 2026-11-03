@@ -1,0 +1,584 @@
+ZEUS FABER / MAG 7 FLOW BOT
+SINGLE COPY-AND-PASTE DEVELOPER README
+Source: mag7_forward_developer_handoff_oct15(1).zip
+Reference revision: October 15, 2026
+Document consolidated: October 17, 2026
+
+DEVELOPER TASK
+
+Change the existing bot's logic to implement the campaign-flow policy described below. Use this document as the consolidated instruction handoff. It incorporates the ZIP's README, developer handoff, October 15 review, reference engine, Discord formatter and test scenarios. No source code is embedded, and no separate ZIP file is required to understand these instructions.
+
+First identify the actual running Jakenew/Mag 7 bot and map its market-data inputs, candidate generation, order handling, fill reconciliation, persistent state and Discord sender. The ZIP contains a standalone paper/shadow reference router, not the current running bot. Its formatter does not send messages, and its router does not submit broker orders. Older JakeVolume archives and alerts_master_engine are different modules; do not assume either is the current attention engine.
+
+Implement and compare the revised policy in paper/shadow mode on the same time-stamped observations as the existing policy. This handoff does not claim deployment, working production integrations, historical backtest results or profitable performance. The numerical thresholds below are configurable paper defaults requiring forward calibration.
+
+
+1. CORE BEHAVIOR
+
+Separate four decisions: observe flow, qualify its buy hypothesis, propose an entry, and manage each filled campaign.
+
+Observe: Find concentrated incremental option-volume shocks with near-ask activity and surprise against comparable windows. Persistent distributed volume is background. Board rank is a watch signal, not an order.
+
+Qualify: Only a shock occurring in the low premium band of its own exact contract contributes to buy attention or an eligible campaign cluster. Missing, middle-band and high-band value evidence contributes zero buy attention under this policy.
+
+Enter: Require repeated, accepted, one-sided flow plus independent underlying direction confirmation, a suitable contract and all execution/risk gates. A score alone never authorizes entry.
+
+Manage: Hold through ordinary premium noise, board changes, pauses and vague exhaustion. Request a full exit for a favorable overnight underlying gap, a planned/expiration deadline, precommitted risk invalidation, or verified opposite-side flow with underlying confirmation. Fill reconciliation is separate from the request.
+
+Each campaign has its own ID, selected contract, horizon, risk reservation, fills and management state. Multiple campaigns can coexist. Proposing another campaign does not close an existing one.
+
+Universe: AAPL, AMZN, GOOGL, META, MSFT, NVDA and TSLA.
+
+Use timezone-aware timestamps. Use America/New_York for trading-day boundaries, scheduled session logic and displayed event times. Use an actual exchange calendar for holidays, session opens, early closes and expiration handling.
+
+
+2. MARKET-DATA AND EVIDENCE CONTRACT
+
+For each completed option window, retain:
+
+- Exact contract identity, ticker, call/put right, strike and expiration; account for adjusted contracts.
+- Window start and end, incremental contracts traded, print count and comparable baseline volume.
+- Near-ask volume and its trade/quote classification provenance.
+- Disjoint completed subwindow volume bins whose sum equals the window's incremental volume.
+- Largest individual print, when available.
+- Premium at window start and end, using a consistent price basis.
+- Underlying spot at event time.
+- Exact-contract premium percentile, reference sample count and latest reference timestamp.
+- Optional implied volatility and seconds to last trading time.
+- Current-session cumulative volume, when available, to locate turnover overlap.
+- Complex-leg volume classification: positively simple, known mixed/complex, or unavailable.
+
+For each full flow snapshot, retain:
+
+- Ticker, snapshot availability time and all completed windows.
+- Explicit covered expirations and call/put coverage for every covered expiration.
+- Complete strike-coverage assertion and trade/quote synchronization assertion.
+- Independent bullish and bearish underlying confirmation flags with their underlying evidence.
+- Feed/source IDs, prior-session contract history and any earlier same-day cohort.
+- The frozen OI context, if available, without accepting a replacement live chain.
+
+For each candidate, retain:
+
+- Stable event ID and decision time.
+- Ticker, intended bullish/bearish direction, planned horizon and planned end.
+- Route score, attention score, stock price and all available contract choices.
+- Each contract's quote time, bid/ask, sizes, feed, expiration, strike, day volume, OI and optional externally supplied utility.
+- Upstream vetoes, raw supporting evidence, evidence availability times and precommitted exit plan.
+- Source campaign ID when this is an explicit rotation proposal.
+
+For each held campaign observation, retain:
+
+- Stable event ID, time and campaign ID.
+- Current option quote, stock price and any independently confirmed structural break.
+- Full current flow snapshot when available.
+- Prior regular-session close, actual new regular-session opening price and opening time when evaluating an overnight gap.
+
+Reject invalid, future, duplicate or internally inconsistent data. Reject overlapping windows for the same contract so one print cannot become multiple independent confirmations. Across successive windows, cumulative volume must advance consistently with the incremental volume. Never use cumulative day volume as a completed event-window volume.
+
+Require genuine availability/publication timestamps. History known at the later decision time but unavailable when the event occurred must not be applied to that earlier event. Coverage and underlying-confirmation flags must reflect checks performed upstream; setting a boolean is not sufficient evidence.
+
+Known complex legs contaminate near-ask volume, bins and print concentration. Exclude the whole mixed window until the adapter rebuilds those fields from simple trades. Do not subtract only the complex volume while keeping contaminated shape statistics. Unknown complex classification remains eligible with COMPLEX_LEG_STATUS_UNAVAILABLE logged.
+
+
+3. EXACT-CONTRACT PREMIUM VALUE GATE
+
+Compare the event premium only with earlier marks for the same exact option series: ticker, right, strike, expiration and adjustment identity.
+
+Use at least 20 positive, valid, comparable prior marks. All reference timestamps must be strictly before the event-window start. Preserve the sample count, latest reference timestamp, reference period and observed sample range. Reject crossed, stale or excessively wide underlying quote inputs before calculating the reference.
+
+Empirical percentile = (number of prior marks below the event premium + half the number equal to it) / number of valid prior marks.
+
+Default classification:
+
+- Percentile at or below 0.25: low band; eligible to contribute to buy attention and clusters if all other gates pass.
+- Above 0.25 and below 0.75: middle band; zero buy-attention credit and no eligible buy-cluster contribution.
+- At or above 0.75: high band; zero buy-attention credit and no eligible buy-cluster contribution. Log HIGH_VALUE_FLOW_SELL_OR_CLOSE_POSSIBLE.
+- Missing percentile, fewer than 20 references or missing reference timestamp: unresolved; zero buy-attention credit and no eligible buy-cluster contribution. Log EXACT_CONTRACT_VALUE_HISTORY_MISSING.
+
+For middle-band rejection, log PREMIUM_OUTSIDE_LOW_VALUE_BAND. Preserve rejected observations for analysis rather than deleting them.
+
+This is a conservative operational eligibility rule. Low premium does not prove fair value or buyer opening. High premium does not prove a sale or closing trade. Log spot, IV, DTE, time of day, spread and price basis because underlying movement, volatility and decay can explain premium changes. The adapter owns comparability and quote quality.
+
+Never use the AAPL 340C historical range to classify AAPL 345C. Never silently replace missing exact-series history with another strike or expiration.
+
+
+4. CONCENTRATED SHOCK QUALIFICATION
+
+Default requirements for an eligible shock:
+
+- Completed window no longer than 300 seconds.
+- At least 50 contracts and at least three prints.
+- Incremental volume at least 2.0 times its comparable-window baseline.
+- Near-ask volume at least 60% of total window volume.
+- Expiration and disjoint volume-bin evidence present.
+- Low-band exact-contract premium gate passed.
+- No known mixed/complex-leg contamination.
+- Window lies within the 1,200-second flow lookback.
+
+Concentration must satisfy either:
+
+A. Largest subwindow at least 45% of window volume AND largest two subwindows together at least 70%; OR
+B. Largest individual print at least 35% of window volume.
+
+A flat 20% / 20% / 20% / 20% / 20% shape is background even when total volume is very large. Log PERSISTENT_OR_DIFFUSE_BACKGROUND_EXCLUDED. Missing shape evidence is excluded with MISSING_EVENT_SHAPE_EXCLUDED.
+
+A qualified shock with flat or falling premium can receive attention but cannot establish accepted campaign control. Log FLOW_WITHOUT_PREMIUM_ACCEPTANCE_WATCH. Accepted flow requires ending premium strictly above starting premium.
+
+One shock remains WATCH until the independent repetition requirements below pass.
+
+
+5. VERIFIED CAMPAIGN CLUSTERS
+
+Assess calls and puts separately within each expiration. Never pool strikes across expirations to manufacture a cluster.
+
+A campaign cluster requires either:
+
+A. The same local pair of strikes qualifies in each of two independent, nonoverlapping completed windows; OR
+B. The same strike qualifies in three independent, nonoverlapping completed windows.
+
+The pair must form a local neighborhood: the gap between the neighboring qualifying strikes, divided by event-time spot, must be at most 2.5%. The reference implementation measures strike spacing; this is not an absolute requirement that each strike lie within 2.5% of spot. Do not impose a hard ATM-only gate on longer-dated OTM flow.
+
+For synchronized multi-strike windows, use matching completed window boundaries. Neighboring qualifying window end times must be at most 420 seconds apart. The latest qualifying cluster window must be no more than 300 seconds old. The snapshot itself must be no more than 60 seconds old at decision time.
+
+Require complete covered-expiration and both-right coverage plus synchronized trade/quote evidence. Incomplete, stale or future evidence cannot certify entry or rotation. Log the applicable reason, including INCOMPLETE_STRIKE_COVERAGE, INCOMPLETE_TRADE_QUOTE_OR_EXPIRY_COVERAGE or STALE_FLOW_SNAPSHOT.
+
+Bullish entry: calls clustered, puts not clustered, and independent bullish underlying confirmation.
+
+Bearish entry: puts clustered, calls not clustered, and independent bearish underlying confirmation.
+
+Both sides clustered: CONTESTED. Log CONTESTED_BOTH_SIDES_CLUSTERING. Do not automatically enter or rotate from contested evidence.
+
+Underlying direction must be derived from recorded underlying data using the actual scanner's documented confirmation rule. This package does not define that upstream rule, so preserve its feature values and provenance rather than inventing a new rule during integration.
+
+
+6. ATTENTION BOARD
+
+Rank unusual concentrated events, not gross cumulative volume. Use the strongest individual eligible event per side of each ticker. Do not add volume or attention across strikes and expirations. Use one complete snapshot per ticker per board refresh.
+
+For each eligible event:
+
+- Volume surprise = minimum of 1 and log base 2 of (window volume / comparable baseline) divided by 3.
+- Shape = larger of largest-bin share and largest-print share.
+- Recency = maximum of zero and 1 minus event age divided by 1,200 seconds.
+- Without valid spot, IV and time-remaining inputs, relevance is neutral at 1.
+- With those inputs, z = absolute natural log of (strike / spot), divided by IV times the square root of remaining seconds / 31,557,600.
+- Relevance = 0.65 + 0.35 times exp(-0.5 times z squared).
+- Raw event attention = 100 times (0.55 times surprise + 0.30 times shape + 0.15 times recency), times relevance.
+
+The relevance weight is soft and bounded. It describes strike distance in expected-move units; it is not a fitted strike-volume bell curve or a hard rejection.
+
+Call attention is the maximum call event score. Put attention is the maximum put event score. Ticker score is the larger of these two. Preserve two-decimal event scores and deterministic ticker tie-breaking.
+
+Board states: WATCH, BULLISH_CONTROL, BEARISH_CONTROL and CONTESTED. Control requires verified clustering plus underlying confirmation. A high raw score or unique leader alone cannot establish control.
+
+Maintain distinct comparable baselines for differing DTE and time-of-day conditions. Preserve the baseline methodology so it can be audited.
+
+
+7. HISTORICAL TURNOVER MEMORY AND TWO SCORING SCENARIOS
+
+For each exact contract, persist append-only observations of previous-session volume, prior reference premium, current published morning OI and, when available, the morning OI before that previous session. Retain source ID, session dates and publication timestamp.
+
+Apply only history available by the event window. Use the window's cumulative-volume position to calculate overlap; do not flag every later window merely because the first window matched history.
+
+With both OI observations:
+
+Historical-match budget = smallest of previous-session volume, current morning OI, and maximum of zero or current morning OI minus earlier morning OI.
+
+Without the earlier OI observation:
+
+Historical-match budget = smaller of previous-session volume and current morning OI, with half-strength evidence.
+
+For each window, its cumulative interval runs from cumulative volume minus window volume to cumulative volume. Measure the intersection of that interval with the historical-match budget running from zero to the budget. Divide overlapping contracts by window volume. Use full weight when earlier OI exists and half weight when it does not. The reference rounds resemblance to four decimals.
+
+This yields turnover resemblance, not known closing volume and not a probability. Prior/current premium ratios do not change the resemblance score.
+
+Example: previous volume 10,000, earlier OI zero and current morning OI 10,000 produce a 10,000-contract match budget. A first concentrated 10,000-contract window today can have full resemblance; the next 1,000 contracts are beyond that budget. A move from $1.50 to $6.50 does not prove closing, and neither does the reverse move.
+
+For 0DTE, persist an earlier qualified same-day concentrated cohort for the exact contract: volume, reference premium, observation time and cumulative volume at its anchor. Use the earliest recorded cohort for that contract/session. A later window can match at most that cohort's volume after its cumulative-volume anchor. Apply half weight because intraday opening is unverified. Missing cohort leaves scoring unchanged. When both historical and intraday resemblance exist, use the larger value, not their sum.
+
+Keep both scoring scenarios explicit:
+
+A. Raw scenario: the live shock receives its full event score.
+B. Discounted scenario: unmatched volume = event volume times (1 minus resemblance). Recalculate capped log surprise from unmatched volume, flooring the surprise at zero. Multiply the resulting full weighted score by (1 minus resemblance), retaining the same relevance weight.
+
+For discounted log calculation, floor unmatched volume at one contract before taking its ratio to baseline. This avoids taking a log of zero. Retain the same shape and recency components before applying the final unmatched fraction.
+
+Display board ordering by raw score. Persist raw and discounted call/put scores, ticker scores and ranks. Do not blend them into an uncalibrated midpoint.
+
+scenario_leader_agrees is true only when both scenarios have the same unique positive top ticker. Ties or all-zero scores do not produce a unique leader. Log LEADER_SCENARIO_DISAGREEMENT where applicable and SIDE_SCENARIO_DISAGREEMENT when the leading side differs between scenarios.
+
+Log OPEN_CLOSE_UNRESOLVED for positive resemblance, PRIOR_SESSION_POSITION_TURNOVER_POSSIBLE at resemblance of at least 0.75, and INTRADAY_POSITION_TURNOVER_POSSIBLE for same-day matches. These labels and evidence weights are provisional.
+
+Turnover resemblance does not veto an otherwise verified entry. It does impose extra independent follow-through before an opposite cluster can cause a rotation exit, as described below.
+
+
+8. ENTRY ROUTING, HORIZON AND CONTRACT SELECTION
+
+Require verified one-sided accepted flow, matching independent underlying direction, a positive planned quantity, a suitable contract, no upstream veto and sufficient reserved premium capacity.
+
+Keep the former 0.550 route-score boundary as a logged comparison. Under this shadow policy it does not veto an otherwise verified cluster. Log VERIFIED_CLUSTER_BELOW_SCORE_BOUNDARY for an accepted proposal below the old boundary. Do not remove unrelated data, execution, expiry or risk gates.
+
+Limit new entry proposals to two per ticker per New York trading day. Count proposals, including ones subsequently cancelled, rather than only fills. Watch and strengthening messages do not count. Protective exits do not count. A rotation's new entry still counts and can be blocked by the cap.
+
+Select INTRADAY, OVERNIGHT or SWING and a planned end before entry. The reference router does not infer the initial horizon from raw flow.
+
+Contract eligibility:
+
+- Calls for bullish thesis; puts for bearish thesis.
+- Expiration must survive the planned end and configured horizon buffer.
+- Default extra expiration buffer: one calendar day for SWING; zero for OVERNIGHT and INTRADAY. Select an actually listed suitable expiration and apply the real calendar/broker deadlines.
+- If the contract expires on the planned-end date, planned end cannot exceed the configured expiration liquidation time.
+- Quote cannot be future-dated or more than 30 seconds old.
+- Bid must be nonnegative, ask positive, and ask must not be below bid.
+- Relative spread = (ask minus bid) / bid-ask midpoint; default maximum 0.30.
+- Ask size must be at least one contract.
+
+Filter invalid choices first and journal each choice's rejection reasons. If externally supplied projected utility exists for every eligible choice, rank first by highest utility. Otherwise rank by tighter relative spread. Subsequent tie-breaks favor tighter spread, higher day volume, later expiration and stable contract-symbol ordering. Partial utility coverage must not silently outrank more liquid alternatives.
+
+Default paper portfolio premium budget: $2,000. This is a reference configuration, not the user's account balance or an instruction to trade that amount.
+
+Reserve proposal ask times quantity times 100 for standard contracts. Include outstanding proposal/entry quantities and active positions in used capacity. As fills arrive, reconcile the actual average fill cost and retain reservation for unfilled quantities. Do not hide a fill above the proposal ask; record it and update risk. Validate adjusted-contract multipliers in the live adapter rather than blindly applying 100 to every instrument.
+
+Return WATCH with explicit reasons when any required gate fails. Proposals are not executions.
+
+
+9. DAILY OI REFERENCE: FREEZE EXPIRATION, THEN PIN THE OPEN
+
+The OI map is a daily location reference, independent of flow eligibility.
+
+Before the open, ingest a complete, synchronized published OI chain with ticker, expiration, right, strike, OI, session date, publication timestamp and source ID. The adapter must actually verify completeness, both sides and relevant strike coverage.
+
+At 9:20 a.m. New York time for a normal 9:30 regular open, freeze the latest complete chain already available and published by the cutoff. More generally use actual regular open minus ten minutes. The reference permits a job invocation from the cutoff up to, but excluding, the open; a delayed invocation still uses the original cutoff, not its invocation time.
+
+Select the nearest listed unexpired expiration in that chain. Include the same day when listed 0DTE exists. Save the full selected-expiration chain and source provenance once per ticker/session, including an explicit empty record if data is missing. Never substitute a later expiration because it has larger OI. Never pool 0-7 DTE.
+
+After the regular open, record the actual regular-session stock opening price, opening time, source ID and when that opening price became available. Pin it immutably for that session. Do not substitute moving live spot or a premarket price. Do not expose reference levels to a replay timestamp before the opening price was actually known.
+
+For the selected expiration and fixed opening stock price:
+
+- Call resistance candidates: positive-OI call strikes at or above the opening price.
+- Put support candidates: positive-OI put strikes at or below the opening price.
+- On each side, first take the six closest eligible positive-OI strikes by distance to the fixed open.
+- From those six, select the three largest OI nodes, with distance to the open breaking OI ties and strike providing deterministic final ordering.
+- Return fewer than three when fewer exist; return none when no eligible level exists.
+
+The six-strike strip is configurable and uncalibrated. It deliberately chooses the largest nodes within a nearby eligible strip rather than the largest OI anywhere in the chain. A put above the fixed open is excluded even if its OI is enormous. A strike exactly at the open can qualify on its respective call/put side.
+
+Persist both the OI freeze and opening-price record across restarts. Do not refresh them intraday or backfill a missed/incomplete morning chain after the open. Refresh on the next actual trading session. If the job misses the open, keep that day's OI context missing and log the incident. Missing OI must not block otherwise valid flow signals.
+
+When enriching flow snapshots, use only the frozen OI chain. Ignore caller-supplied or subsequently published replacement OI for this reference.
+
+Important distinction: eligibility is anchored to the fixed regular opening price. The rules do not continually recalculate the display around falling intraday spot.
+
+
+10. OI CLUSTER ZONES AND SCANNER COVERAGE
+
+Continue scanning qualifying events across all watched strikes and expirations, including strikes outside the displayed OI top three and expirations beyond the frozen nearest expiration. The OI display is not a scanner filter.
+
+Derive a descriptive OI zone only for a confirmed flow cluster in the frozen selected expiration, using the complete relevant published chain that existed before the cluster. A farther-expiration cluster remains normally eligible but has no nearest-expiration OI zone.
+
+Sort listed strikes on that side. Each strike's cell spans the midpoint to its previous listed neighbor and midpoint to its next listed neighbor. At a chain edge, extrapolate half the nearest spacing. Merge cells only for consecutive active strikes. Preserve lower/upper bounds, active strikes, OI per strike, expiration, right, OI publication time and supporting cluster-window times.
+
+Return no zone for incomplete, duplicated, future or insufficient chain evidence, or when an active strike is absent. The reference needs at least two listed strikes on each side to claim complete adjacent-strike context; the adapter must still verify actual completeness beyond that minimum.
+
+Journal the zone and full flow snapshot. Do not include diagnostic zones in the public trade card. Touching a zone, large cumulative volume at a zone, or an OI node alone cannot create an entry or exit.
+
+OI includes outstanding long and short positions. It is not proven support/resistance and does not label a specific print as opening or closing.
+
+
+11. HOLD RULES AND REMOVED EXITS
+
+Remove premium structure broke / higher lows failed as an automatic exit predicate and position-manager input. Remove generic multi-variable exhaustion as an automatic exit unless replaced by one of the explicitly supported, auditable exits below.
+
+Do not exit merely because:
+
+- Premium dips, makes a lower low or loses a short-term pattern.
+- The attention score drops or another ticker leads.
+- The board label flips CALL/PUT without verified opposite flow.
+- Ordinary flow pauses or an unquantified exhaustion label appears.
+- An OI level or zone is touched.
+- A gain reaches +60% or +150%, or a 35% trailing threshold is crossed.
+
+There is no automatic half sale, percentage profit target or percentage trailing exit in this reference policy. There is also no default -18% stop. Precommitted risk controls below remain available.
+
+If calls continue clustering and puts do not, hold the call campaign through premium noise; apply the mirror rule to puts. Both sides clustering is contested, not an automatic reversal. Existing risk and deadline exits still apply during contested flow.
+
+Record favorable/adverse executable-bid marks, peak bids and gain percentages for later comparison. Recording a mark does not create a sale.
+
+Retain the reference's auxiliary single-contract bar diagnostics when useful: over the last 20 completed chronological bars, record total volume, the largest three bars' share of total volume, fraction of bars with positive volume, latest bar's share, and latest close's position within the observed closing-price range. The last item is (latest close minus minimum close) / (maximum close minus minimum close), or zero for a flat range. Despite its legacy value_percentile field name, this range-location diagnostic is not the empirical exact-contract percentile in Section 3 and cannot replace that entry gate. Empty histories return zero diagnostics; future or nonchronological bars are invalid.
+
+
+12. SUPPORTED FULL-EXIT REQUESTS
+
+Evaluate the following in this priority order. Preserve all applicable reason codes.
+
+1. Favorable overnight underlying gap.
+
+For a position carried from before the new regular-session open, compare that actual opening stock price with the prior regular-session close. Calls exit on a favorable gap up; puts exit on a favorable gap down. The default minimum gap fraction is zero, so any strictly positive favorable gap qualifies. A flat open does not.
+
+Request sale of all remaining contracts at the first usable opening quote. This is an underlying-gap rule, not an option-premium gap rule. Once triggered, persist the pending exit through later observations until fills resolve it. Do not assume the opening chart mark is executable.
+
+Reason: FAVORABLE_REGULAR_SESSION_OPEN_GAP_SELL_ALL.
+
+2. Planned or expiration deadline.
+
+Request full liquidation at the earlier of planned end and configured expiration liquidation deadline. Reference expiration cutoff: 15:30 New York time on the expiration date. Validate the actual instrument, exchange calendar, early close and broker policy and use an earlier effective cutoff when required.
+
+Reason: PLANNED_OR_EXPIRY_EXIT_DEADLINE.
+
+3. Precommitted risk invalidation.
+
+An adverse underlying level can trigger only when that level was specified beforehand and an independent structural break is confirmed: at/below the level for bullish campaigns, at/above for bearish campaigns. An explicitly configured maximum premium-loss fraction can also trigger using a fresh executable bid against actual average entry fill.
+
+Reasons: PRECOMMITTED_UNDERLYING_INVALIDATION and/or PRECOMMITTED_PREMIUM_RISK_LIMIT.
+
+Do not invent a loss threshold after entry. Where no earlier exit applies, the entire paid premium remains at risk.
+
+4. Confirmed opposite-side rotation.
+
+For a held call campaign, require one-sided accepted put clustering and independent bearish underlying confirmation; mirror for a held put. Evaluate management flow after that campaign's entry time so old pre-entry events cannot rotate it.
+
+If both sides cluster, there is no clean rotation. If the opposite cluster includes historical/same-day turnover overlap, require later independent unmatched follow-through beyond the latest ambiguous window: either a qualifying local pair in a later window, or the same strike in two later qualifying windows no more than seven minutes apart. Those later windows must begin at or after the last ambiguous window ended and must have zero turnover resemblance. The original active-cluster requirements still apply.
+
+Once verified, request a full exit of that specific campaign, persist the rotation direction and keep the request pending through quote problems and partial fills.
+
+Reason: CONFIRMED_OPPOSITE_CLUSTER_ROTATION.
+
+If follow-through is missing, hold and log ROTATION_AWAITING_INDEPENDENT_FOLLOWTHROUGH. A matched cluster can still qualify for ordinary entry; rotation uses the stricter follow-through rule.
+
+
+13. EXIT REQUESTS, QUOTES AND OPPOSITE RE-ENTRY
+
+For a usable reference exit quote, require a nonfuture bid no older than 30 seconds, positive bid and bid size of at least one. Otherwise emit EXIT_PENDING_EXECUTABLE_QUOTE and retain the exit intent. A usable quote supports an exit request; it never establishes an execution.
+
+Implement broker-specific order routing, cancellation, fallback and reconciliation in the real integration. Prevent repeated observations from creating duplicate orders. Track fills and remaining quantity by campaign and broker order ID. Partial exit fills leave the remaining quantity open and any persistent gap/rotation intent pending.
+
+Do not create the opposite rotation entry until the source campaign's full exit is confirmed and it is truly CLOSED. The new entry must reference that campaign, match its verified rotation direction, use still-fresh qualifying evidence and pass all entry, contract, cap and risk gates. If an entry remainder is still outstanding, the source campaign is not fully closed.
+
+The opposite entry receives a new campaign ID and its own contract, expiration, horizon, reservation and fills. A low board score alone does not block a verified proposal. A daily cap or other failed gate still can.
+
+Rolling to another contract is a separate executor workflow and is not implemented by the supplied reference. Broker exercise, forced liquidation and expiration outcomes must be reconciled from authoritative records, not assumed chart marks.
+
+
+14. CAMPAIGN LIFECYCLE, PARTIAL FILLS AND IDEMPOTENCY
+
+Persist at least these campaign states: PROPOSED, ACTIVE, ENTRY_PENDING, CLOSED and CANCELLED.
+
+PROPOSED: valid proposal with premium reserved; no assumed position.
+
+ACTIVE: actual held quantity exists. Partial entry fills increase held quantity and reduce outstanding entry quantity while preserving reservation for the remainder. Record actual weighted average fill cost and first entry time.
+
+ENTRY_PENDING: all currently held contracts have exited but an entry remainder is still outstanding. Do not mark CLOSED and lose a later fill. Reconcile the outstanding order; if another valid fill arrives, restore held state and manage it.
+
+CLOSED: no held contracts and no outstanding entry remainder.
+
+CANCELLED: an unfilled proposal's cancellation is confirmed and reservation released. If an entry has partially filled, cancel only the unfilled remainder after confirmation and preserve management of held contracts.
+
+Reference fill validation accepts entry fills only for outstanding quantity within the proposal's New York day and before planned end. The live adapter must also account for any broker event outside that expected window as a reconciliation exception rather than silently ignoring a real position.
+
+Use stable event IDs so duplicate candidate, management, cancellation and fill events return their prior recorded result. Use transactional state changes for proposal counting and risk reservations. Restarting must preserve campaigns, pending exits, unfilled quantity, OI reference, opening spot and prior decisions.
+
+Exit fills cannot exceed held quantity or predate entry. Record actual realized dollars from exit price minus entry basis, times contract multiplier and filled quantity. Independently recorded manual fills can be reconciled; this does not reintroduce automatic scaling rules.
+
+
+15. DISCORD PUBLIC CARD FORMAT
+
+Keep public cards compact. Supported event labels:
+
+- ENTRY_PROPOSED: planned entry, awaiting fill.
+- ENTRY_FILLED: confirmed entry execution.
+- EXIT_PROPOSED: requested exit, awaiting fill.
+- EXIT_FILLED: confirmed exit execution.
+
+Use green for entry and red for exit. A proposed card says PROPOSED - awaiting fill and labels any displayed price Indicative quote and quantity Planned contracts. A filled card says FILLED and labels price Actual fill and quantity Contracts.
+
+Include only contract and expiration, status, indicative quote or actual fill as appropriate, quantity, campaign ID, event timestamp, short recorded exit reason/return when applicable and the exact footer below.
+
+Footer: Paper simulation Â· Options can lose 100% Â· Not investment advice.
+
+Show time in America/New_York. Use timezone-aware event timestamps. Do not automatically mention @everyone or any role/user; disable automatic mention parsing. Validate identity and reason fields so untrusted input cannot inject mentions or extra formatted content. Reference limits are 80 characters each for campaign ID and contract and 160 for reason; reject line breaks and the characters @, backtick, < and > in those fields.
+
+Filled cards require actual fill price and quantity. EXIT_FILLED additionally requires that campaign's weighted average actual entry basis. Option return = (actual exit fill / average actual entry fill minus 1) times 100, shown to one decimal with a sign and '(fills)'. This percentage excludes fees. Never calculate it from an entry proposal quote or a chart mark.
+
+For a partial execution, state the actual quantity executed; do not imply the whole campaign is closed. Keep remaining order/position state accurate in the backend.
+
+Suppress repeated watch/strengthening notifications at the Discord layer by stable event ID. Do not suppress required entry-fill or exit notifications. The two-entry cap limits proposals, not Discord messages or protective actions.
+
+Keep scores, OI zones, percentiles, volume windows, gate tables, quote provenance, diagnostic hypotheses and full exit decisions in the backend journal, not the public card.
+
+ENTRY EXAMPLE
+
+GREEN ENTRY Â· PROPOSED Â· awaiting fill
+AAPL 345C Â· Oct 16
+Indicative quote $2.90 Â· Planned contracts 2
+Campaign 8f3... Â· 10:02 ET
+Paper simulation Â· Options can lose 100% Â· Not investment advice.
+
+EXIT EXAMPLE
+
+RED EXIT Â· FILLED
+AAPL 345C Â· Oct 16
+Actual fill $2.54 Â· Contracts 2 Â· Option return -12.4% (fills)
+Reason: Confirmed opposite put cluster
+Campaign 8f3... Â· 10:09 ET
+Paper simulation Â· Options can lose 100% Â· Not investment advice.
+
+These are format examples. The illustrated exit reason is not a revised explanation of the historical AAPL exit. A real card must use its actual recorded reason and fill.
+
+
+16. BACKEND JOURNAL AND MEASUREMENT
+
+Persist append-only decisions and raw supporting evidence alongside transactional campaign state. The reference uses SQLite; the existing implementation may retain its own durable equivalent if these semantics survive.
+
+Store:
+
+- Every candidate, including rejects and all per-contract gate failures.
+- All evaluated completed windows, qualified windows and rejection reasons.
+- Exact-contract premium samples/provenance and value-gate decisions.
+- Coverage, quote synchronization and underlying confirmation evidence.
+- Raw/discounted board scores, ranks and disagreement labels.
+- Historical OI/volume memory and intraday cohorts with real availability times.
+- Full OI chains, daily freeze, fixed opening price and descriptive cluster zones.
+- Campaign horizon, planned end, contract selection and precommitted risk plan.
+- Reservations, order IDs, actual entry/exit fills, partial quantities and cancellations.
+- Each exit decision, pending status, reason and rotation linkage.
+- Executable-bid adverse/favorable paths, peak bids, later close/next-open marks and suppressed candidates' shadow marks.
+- Missed/false rotations and data-quality or scheduling incidents.
+
+Shadow marks of rejected candidates remain observations, never invented fills. For delayed or zero bids, record the actual quote issue. Preserve OPRA versus indicative feed identity; do not treat them as interchangeable.
+
+Use a new journal for the revised schema or explicitly migrate the earlier one. Do not silently reuse incompatible prototype tables.
+
+Measure the old and revised policies on the identical observed sequence. Include suppressed candidates and later executable bids, rather than only alerts that were sent. Threshold calibration must use forward observations without future leakage.
+
+
+17. OCTOBER 15 REVIEW CONTEXT
+
+The review was based on supplied Discord and chart screenshots through roughly 10:41 a.m. Arizona time. Discord labeled paper orders; charts stated a 15-minute delay. They did not supply the actual live predicates, synchronized trade/quote tape, complete OI snapshot or reconciled broker fills. Reported screenshot prices/outcomes below are context, not verified executions.
+
+AAPL 345C, Oct 16:
+7:02 Arizona entry at $2.90 x 2, attention 88 and call share 55%. 7:09 reported exit $2.54, about -12%, after seven minutes, labeled genuine multi-variable exhaustion while the board still said CALL. Obtain the component predicates and the 345C's own premium history. Do not substitute the 340C value range.
+
+GOOGL 350P, Oct 16:
+Entry around 7:07 inferred from holding time, $2.92 x 2. 7:11 reported exit $2.40, about -18%, after four minutes, higher lows failed. Under the revised policy that premium pattern alone cannot end the campaign.
+
+NVDA 215P, Oct 16:
+Entry around 7:31 inferred, $2.21 x 3. 7:41 reported exit $1.95, about -12%, after ten minutes, higher lows failed and board CALL. Verify a real opposite call cluster; a separate 7:22 A+ underlying LONG alert belongs to another model and is not automatically an option exit.
+
+META 730P:
+7:37 near miss, route 0.543 versus 0.550; no paper order. Preserve suppressed evidence and later bid marks. Do not promote the example from hindsight.
+
+AMZN 252.5P, Oct 16:
+8:01 entry $1.80 x 3; 8:05 reported exit $1.50, about -17%, higher lows failed. Apply the same removal of premium-pattern-only exits.
+
+TSLA 360P, Oct 16:
+8:15 entry $4.30 x 1; 9:13 strengthening; 9:38 reported exit $5.60, about +30%, REVERSAL_ACTIVATED with CALL flip pending and five events at 360/362.5. Preserve both sides' windows and verify that the opposite campaign passed the full gates.
+
+MSFT 537.5P, Oct 16:
+8:38 entry $3.44 x 2; 8:54 reported exit $3.12, about -9%, shown as 15 minutes held, genuine multi-variable exhaustion. Preserve component-level evidence and test for a valid opposite call campaign.
+
+AAPL exact-series caution:
+The marked multi-day $3.50-$4.50 low and $7.50-$8.00 high ranges belong to 340C. The actual entry discussed was 345C around $2.90. Its supplied intraday chart included a 10:00 ET candle with 6.57k volume and four displayed prices of $2.56/$2.80/$3.18/$2.51; do not infer executable fills or historical premium classification from that delayed candle. The 7:02 Arizona alert would align approximately with 10:02 ET only if clocks were synchronized.
+
+
+18. NVDA OI ILLUSTRATION
+
+The supplied October 16 chain screenshot showed approximately:
+
+- 215P: 27.3k OI and 60.56k cumulative day volume.
+- 212.5P: 15.9k OI and 54.64k cumulative day volume.
+- 220P: 71.7k OI.
+- 220C: 100.4k OI.
+
+The stock chart showed a flush into approximately $213-$215 and rebound. If the actual regular opening price was below $220, exclude 220P from the put support reference even though its OI is larger. 220C remains an eligible call candidate if at/above that fixed open, subject to the nearby-strip selection.
+
+The actual opening price and complete morning chain are needed to calculate the precise reference. Continue inspecting 215P and other valid flow even if not displayed in the top three. Delayed charts and cumulative day volume do not prove a concentrated synchronized event, opening put intent or causal support. Keep this illustration in diagnostics, not public cards.
+
+
+19. OCTOBER 8-9 REVIEW CHECKPOINTS
+
+NVDA 235P reportedly entered $2.34 x 3 and exited nine minutes later $1.92, about -18%, because premium higher lows failed. Board direction changed PUT to CALL. The revised policy holds through those two facts alone; actual opposite clustering remains unresolved without the event stream.
+
+AAPL 340C reportedly entered $1.04 x 6, sold three at $1.77 (+70%) and closed runners at $1.54 (+48%). This reference policy would not scale merely because of those percentages.
+
+Screenshots also showed a late October 8 340P cluster, a next-morning put jump and an October 9 rebound in 332.5C. A genuinely held overnight put with a favorable gap down would request full sale at the first usable opening quote. Any later call is a separate campaign. Screenshots alone cannot establish executable prices or opening/closing intent.
+
+META put near misses at 0.452 and 0.528 versus 0.550, and the end-of-day attrition message, are research checkpoints for shadow comparison. They do not establish an edge.
+
+
+20. ACCEPTANCE CHECKS TO PORT INTO THE EXISTING BOT
+
+The ZIP contains 38 focused reference test cases. Preserve their behavioral coverage while adapting to the real application's interfaces:
+
+1. Exact-series value history excludes future observations and other strikes.
+2. Missing, middle/high-band or insufficient value history cannot create eligible buy attention or entry.
+3. Discord distinguishes proposal, actual fill and fill-based exit return.
+4. OI levels use the correct session, publication time and call/put side.
+5. A cluster outside the displayed OI top three can build a backend zone and stays off the public card.
+6. Daily OI uses the fixed regular opening price and correct side of market.
+7. OI published after a cluster cannot be applied retrospectively.
+8. Nearest expiration remains frozen all day and refreshes next session.
+9. Missing premarket OI stays missing and cannot be backfilled intraday.
+10. A delayed premarket invocation uses the fixed cutoff; another expiry gets no nearest-expiry zone.
+11. Scoreboard changes and premium noise alone do not end a campaign.
+12. Winners are not automatically scaled at a premium percentage.
+13. Entry uses a verified cluster, not rank or route score alone.
+14. A verified opposite cluster requests exit; opposite entry waits for full exit and is separate.
+15. One-strike control requires three distinct completed windows.
+16. Contested, stale, incomplete or nonaggressive flow cannot manufacture a rotation.
+17. Independent underlying confirmation is required and future windows are rejected.
+18. Old clusters cannot trigger a late rotation.
+19. Diffuse background does not rank or rotate.
+20. Overlapping windows cannot multiply one print.
+21. Disjoint strike neighborhoods and different expirations cannot manufacture coherence.
+22. Missing synchronization/expiration coverage fails closed for campaign qualification.
+23. A single shock may rank but remains WATCH rather than control.
+24. Prior volume/OI matches generate uncertainty and explicit scoring scenarios.
+25. Only the overlapping part of a window receives historical-match allocation.
+26. Matched turnover does not automatically veto verified same-side control/entry.
+27. An ambiguous opposite cluster waits for independent unmatched follow-through before rotation.
+28. Known complex legs cannot create directional control; unavailable classification is explicitly logged.
+29. Board output exposes raw/discounted rank and side disagreement.
+30. 0DTE can use an earlier same-day cohort without asserting intraday OI.
+31. OI history is point-in-time evidence, not a closing probability.
+32. A low-premium shock is WATCH without the full entry pattern.
+33. Partial entry fills retain outstanding quantity and actual price basis.
+34. A late entry remainder after an exit is not lost or mistaken for a permanently closed position.
+35. Rotation exits remain pending through stale quotes and partial fills.
+36. Favorable-gap, risk, expiration and two-entry-cap controls remain active.
+37. Hard risk and expiration exits remain functional without a reversal.
+38. Shadow marks, duplicate event processing and restarts preserve correct state.
+
+These are required behaviors to verify, not a claim that the existing production bot has passed them. Also test the live adapter's calendar, feed synchronization, order IDs, cancellations, delayed fills and restart reconciliation.
+
+
+21. SOURCE LIMITATIONS AND INTEGRATION DECISIONS
+
+Preserve these distinctions explicitly during implementation:
+
+- The prose uses neighboring/adjacent strikes; the reference cluster code checks neighboring qualifying strikes with a spacing limit of 2.5% of spot. It does not independently verify that no other listed strike lies between them. Record which adjacency interpretation the integrated scanner applies; do not silently add a new ATM-distance gate.
+- The source router supplies no numeric near-ask tolerance, comparable-history sampling schedule, baseline estimator or underlying-confirmation formula. Use and document the actual adapter's definitions and log their evidence. These missing upstream definitions cannot be inferred from screenshots.
+- The reference formatter requires positive displayed fill prices, while the journal can record a zero-price exit. Handle zero-value expiration/write-off records explicitly in the integration without inventing a positive execution price. This is a source interface mismatch to resolve, not a new trading rule.
+- The expiration cutoff and one-day swing buffer are paper defaults. Real calendar and broker constraints must determine the effective usable deadline.
+- The package does not include AWS deployment, a market-data client, a Discord sender or broker execution/reconciliation. Wire these existing components to the revised policy and verify them separately. Do not represent the reference router as a complete deployed service.
+- No complete October 15 event tape or historical option dataset was supplied. Numerical thresholds and performance remain unvalidated.
+
+Keep print location, aggressor hypothesis and opening/closing hypothesis separate. Near-ask activity, rising premium and day volume exceeding morning OI do not prove buy-to-open. OI can remain unchanged when one party opens and the other closes. A next-day OI change is aggregate evidence, not a label for a specific print; after 0DTE expiry, disappearance of OI is not a clean audit of intraday closing. Do not publish '$X fresh opening premium' as measured fact when it is only inferred.
+
+Reference links retained from the source package for the developer's review:
+OIC general options information and opening/closing combinations: https://www.optionseducation.org/referencelibrary/faq/general-information
+OIC option-price behavior: https://www.optionseducation.org/referencelibrary/faq/option-price-behavior
+OIC trade entry/execution: https://www.optionseducation.org/referencelibrary/faq/trade-entry-execution
+Cboe open-close dataset fields: https://datashop.cboe.com/cboe-options-open-close-volume-summary
+Cboe complex-book process: https://cdn.cboe.com/resources/membership/US-Options-Complex-Book-Process-pdf.pdf
+
+
+22. IMPLEMENTATION COMPLETION REPORT
+
+Return a concise report identifying the running modules changed, how the data/order interfaces map to these rules, the acceptance checks performed, old-versus-new shadow differences, and any remaining missing upstream inputs.
+
+Show sample proposed and filled Discord cards using clearly labeled test data. Demonstrate restart-safe state, no duplicate orders/messages, partial-fill reconciliation, fixed daily OI behavior and correct pending exits before describing the integration as complete.
+
+Implement the policy in the existing codebase. Keep the detailed diagnostics in the journal and the public trade cards compact. Do not describe a proposal, a delayed screenshot price or a shadow mark as a confirmed fill.
+
+END OF SINGLE DEVELOPER README

@@ -16,6 +16,8 @@ The goal is 0-3 waves and ≤5 primary entries per session — not a trade every
 minute. Execution is real only when config.LEGACY_ORDERS_ENABLED; otherwise SHADOW accounting.
 """
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 
 import config
@@ -111,6 +113,11 @@ class AttentionEngine:
         # default; with CF_MODE=PAPER it owns the paper orders and this engine stops ordering.
         self.cf = None
         self._raw_snaps: dict = {}         # sym -> (spot, expiry, unfiltered snapshots) for this poll
+        self._raw_next: dict = {}          # sym -> (next expiry, snapshots) when the nearest expires today (CF carry)
+        self._timing: dict = {}            # sym -> {poll_start_ts, fetch_start_ts, recv_ts, server_ts} this poll
+        self._cycle_incidents: list = []   # coverage incidents closed during the current ingest cycle
+        self._last_failed: list = []       # tickers whose fetch failed in the previous cycle
+        self._pool = ThreadPoolExecutor(max_workers=max(1, len(config.MAG7)), thread_name_prefix='fetch')
         if config.CF_MODE in ('SHADOW', 'PAPER'):
             try:
                 from campaign_flow.runner import Runner
@@ -548,32 +555,74 @@ class AttentionEngine:
         self._last_cand = cand
         state.save(self.state)
 
+    def _fetch_one(self, sym: str):
+        """Network half of one ticker's ingest (runs on a worker thread; touches no engine state).
+        Returns (spot, expiry, snaps, timing) or None. recv_ts = when ALL of this ticker's responses had
+        arrived — the time campaign-flow decides at and feed coverage measures."""
+        fetch_start = time.time()
+        spot = self.data.get_spot(sym)
+        expiry = self.data.get_nearest_expiry(sym)     # dynamic: 0DTE if listed, else nearest
+        if not spot or not expiry:
+            return None
+        snaps = self.data.get_option_snapshots(sym, expiry, spot, config.PREMIUM_BAND_PCT)
+        if not snaps:
+            return None
+        nxt = None
+        if self.cf and self.cf.wants_next_expiry(expiry):
+            # campaign-flow overnight carry: when the nearest expiration expires today, also observe the next
+            # one, so flow positioned beyond today is visible (Mag 7 brief item 1). Legacy engine ignores it.
+            e2 = next((e for e in self.data.get_scan_expiries(sym, 2) if e > expiry), None)
+            s2 = self.data.get_option_snapshots(sym, e2, spot, config.PREMIUM_BAND_PCT) if e2 else None
+            nxt = (e2, s2) if s2 else None
+        return spot, expiry, snaps, {'fetch_start_ts': fetch_start, 'recv_ts': time.time(),
+                                     'server_ts': getattr(self.data, 'last_server_ts', None)}, nxt
+
     def _ingest_all(self, now: datetime) -> list:
-        measured = []
+        """One poll cycle. The Mag-7 are FETCHED IN PARALLEL (one worker per ticker; a sequential loop made
+        the last ticker's data ~10 s younger than the first's and let one slow request stall every ticker
+        after it), then PROCESSED sequentially in MAG7 order so engine state is updated deterministically.
+        `now` is the cycle START (legacy engine clock); per-ticker receipt times are kept in `_timing`."""
+        measured, failed = [], []
+        poll_start = now.timestamp()
+        self._timing = {}
+        futs = {sym: self._pool.submit(self._fetch_one, sym) for sym in config.MAG7}
         for sym in config.MAG7:
             try:
-                spot = self.data.get_spot(sym)
-                expiry = self.data.get_nearest_expiry(sym)     # dynamic: 0DTE if listed, else nearest
-                if not spot or not expiry:
+                got = futs[sym].result()
+                if got is None:
+                    failed.append(sym)
                     continue
-                snaps = self.data.get_option_snapshots(sym, expiry, spot, config.PREMIUM_BAND_PCT)
-                if not snaps:
-                    continue
+                spot, expiry, snaps, tm, nxt = got
+                recv = tm['recv_ts']
+                self._timing[sym] = {'poll_start_ts': poll_start, **tm}
                 self._raw_snaps[sym] = (spot, expiry, snaps)
+                if nxt:
+                    self._raw_next[sym] = nxt
+                else:
+                    self._raw_next.pop(sym, None)
                 # Addendum #11-12: validate the OPRA stream before it feeds event detection — drop
                 # crossed/negative/no-mark snapshots so a bad quote can't fabricate an "event".
                 if config.DATA_QUALITY_ENABLED:
                     snaps = self._clean_snaps(sym, snaps, now)
                     if not snaps:
+                        failed.append(sym)
                         continue
                 self._snaps[sym], self._spot[sym], self._expiry[sym] = snaps, spot, expiry
                 self.flow.ingest(sym, snaps, spot, now)
                 measured.append(sym)
-                inc = self.coverage.ok(sym, now.timestamp())
+                inc = self.coverage.ok(sym, recv)
                 if inc:
-                    self._coverage_incident(inc, now)
+                    self._cycle_incidents.append(inc)
             except Exception:
+                failed.append(sym)
                 logger.warning("%s: ingest failed", sym, exc_info=True)
+        self.coverage.cycle_done(measured, time.time())
+        dur = time.time() - poll_start
+        if self._cycle_incidents:
+            self._coverage_incident(self._cycle_incidents, now, dur, failed, self._last_failed)
+        self._cycle_incidents = []
+        self._last_failed = failed
+        logger.debug("POLL-CYCLE ingest %.1fs ok=%d failed=%s", dur, len(measured), failed or '-')
         return measured
 
     def cf_tick(self, now: datetime) -> None:
@@ -601,18 +650,26 @@ class AttentionEngine:
             except Exception:
                 pass
             try:
-                self.cf.on_poll(now, sym, spot, expiry, snaps, legacy)
+                self.cf.on_poll(now, sym, spot, expiry, snaps, legacy, timing=self._timing.get(sym),
+                                extra=[self._raw_next[sym]] if sym in self._raw_next else None)
             except Exception:
                 logger.warning("campaign-flow poll failed for %s", sym, exc_info=True)
 
-    def _coverage_incident(self, inc, now) -> None:
-        """A feed gap closed: the next fresh-window read spans the gap, so the ticker is DEGRADED (no new
-        entries) until windows refill. Logged, and posted once per incident as a visible notice."""
-        logger.warning("COVERAGE-INCIDENT %s no usable data for %.0fs — entries disabled for %.0fs "
-                       "while fresh-flow windows refill", inc['symbol'], inc['gap_s'], config.COVERAGE_RECOVERY_S)
-        if config.COVERAGE_NOTIFY_MIN_GAP_S and inc['gap_s'] >= config.COVERAGE_NOTIFY_MIN_GAP_S:
+    def _coverage_incident(self, incs, now, cycle_s, failed, prev_failed) -> None:
+        """Feed gaps closed this cycle: each ticker is DEGRADED (no new entries) until windows refill.
+        Tickers are fetched in parallel but the cycle ends with its slowest fetch, so one slow or failed
+        request lengthens the gap for EVERY ticker in that cycle — simultaneous gaps are one stall, not seven
+        outages. Logged per ticker; posted as ONE notice per cycle naming the cause (failed fetches / cycle
+        duration)."""
+        for inc in incs:
+            logger.warning("COVERAGE-INCIDENT %s no usable data for %.0fs (%s) — entries disabled for %.0fs "
+                           "while fresh-flow windows refill", inc['symbol'], inc['gap_s'], inc.get('cause'),
+                           config.COVERAGE_RECOVERY_S)
+        loud = [i for i in incs if config.COVERAGE_NOTIFY_MIN_GAP_S and i['gap_s'] >= config.COVERAGE_NOTIFY_MIN_GAP_S]
+        if loud:
             try:
-                notify.coverage_card(inc, recovery_s=config.COVERAGE_RECOVERY_S, now=now)
+                notify.coverage_card(loud, recovery_s=config.COVERAGE_RECOVERY_S, now=now, cycle_s=cycle_s,
+                                     failed=sorted(set(failed) | set(prev_failed or ())))
             except Exception:
                 pass
 
@@ -984,15 +1041,19 @@ class AttentionEngine:
             return
         self._expiry_scan_ts = now
         today = today_cst()
+
+        def fetch(sym, spot):                       # worker thread: network only, one ticker's expiries
+            exps = self.data.get_scan_expiries(sym, config.MULTI_EXPIRY_MAX)
+            return [(e, self.data.get_option_snapshots(sym, e, spot, config.PREMIUM_BAND_PCT)) for e in exps]
+
+        futs = {sym: self._pool.submit(fetch, sym, self._spot[sym]) for sym in config.MAG7 if self._spot.get(sym)}
         for sym in config.MAG7:
-            spot = self._spot.get(sym)
-            if not spot:
+            if sym not in futs:
                 continue
+            spot = self._spot[sym]
             try:
-                exps = self.data.get_scan_expiries(sym, config.MULTI_EXPIRY_MAX)
                 by_expiry, dte_by = {}, {}
-                for e in exps:
-                    snaps = self.data.get_option_snapshots(sym, e, spot, config.PREMIUM_BAND_PCT)
+                for e, snaps in futs[sym].result():
                     if not snaps:
                         continue
                     strikes = {(k, side): {'fresh_vol': v.get('volume', 0) or 0, 'mark': v.get('mark') or 0}
@@ -1068,13 +1129,14 @@ class AttentionEngine:
                 logger.info("CAMPAIGN STRENGTHENING %s %s — same-side flow reinforcing "
                             "(z=%.1f ctrl=%.2f share=%.0f%%) — HOLD, not a new entry",
                             pos['symbol'], pos['side'], m['mass_z'], ctrl, 100 * m.get('attention_share', 0.0))
-                try:
-                    notify.send(f"🟡 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
-                                f"(same-side flow reinforcing; HOLD, not a new entry)",
-                                signal_id=f"reinforce|{pos['symbol']}|{pos['side']}|"
-                                          f"{pos.get('opened_at')}|{now.isoformat()}")
-                except Exception:
-                    pass
+                if config.LEGACY_DISCORD_ENABLED:
+                    try:
+                        notify.send(f"🟡 {pos['symbol']} {pos['side']} — CAMPAIGN STRENGTHENING "
+                                    f"(same-side flow reinforcing; HOLD, not a new entry)",
+                                    signal_id=f"reinforce|{pos['symbol']}|{pos['side']}|"
+                                              f"{pos.get('opened_at')}|{now.isoformat()}")
+                    except Exception:
+                        pass
 
     # ── Phase 6: candidate archive / campaign replay (throttled, JSONL) ───────────
     def _archive_snapshot(self, ranked, metrics_by, cand, now) -> None:
@@ -2022,8 +2084,25 @@ class AttentionEngine:
         logger.info("ATTRITION-REPORT POST-ROUTE veto (why ROUTE_PASSED did not ENTER): %s", prv or '{}')
         logger.info("ATTRITION-REPORT near-miss (0.45-0.55) by route: %s", nm or '{}')
         logger.info("NOTIFY-OUTBOX %s", notify.outbox_stats() or '{}')   # PENDING/DEAD = delivery backlog
+        if self.cf:
+            # The ACTIVE policy's own funnel and rejection reasons, from its journal. The legacy counters
+            # below describe the compute-only engine and read zero whenever it is not the one deciding.
+            try:
+                from campaign_flow import summary as cf_summary
+                sess = self.cf.session or today_cst().isoformat()
+                text = cf_summary.summary_text(cf_summary.session_summary(self.cf.j, sess), self.cf.mode,
+                                               outbox=notify.outbox_stats(), polls=self.cf.polls)
+                for line in text.splitlines():
+                    logger.info("CF-EOD %s", line)
+                if config.EOD_DISCORD_ENABLED:
+                    notify.send(text[:1990], signal_id=f"cf-eod|{sess}")
+            except Exception:
+                logger.warning("campaign-flow EOD summary failed", exc_info=True)
+        if not (config.EOD_DISCORD_ENABLED and config.LEGACY_DISCORD_ENABLED):
+            return
         try:
-            notify.send(f"📊 Jakenew EOD attrition — ACTIVE {len(a['evaluated'])} → qualified "
+            notify.send(f"📊 Legacy engine EOD attrition{' (compute-only)' if self.cf and self.cf.mode == 'PAPER' else ''}"
+                        f" — ACTIVE {len(a['evaluated'])} → qualified "
                         f"{len(a['qualified'])} → route-passed {len(a['route_passed'])} → entered "
                         f"{len(a['entered'])} | post-route veto {prv or '{}'} | route-veto {hv or '{}'}")
         except Exception:

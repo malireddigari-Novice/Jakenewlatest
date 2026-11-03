@@ -1,0 +1,26 @@
+forward outcomes computed for 725/740 candidates (missing = no bars for the reconstructed contract)
+
+==============================================================================
+NEAR-MISS COHORT (scored 0.45-0.54, NOT entered) — do these contain winners?
+==============================================================================
+  0.50-0.54  {'N': 12, 'win%_eod': 42, 'med_MFE': 0.4779, 'med_MAE': -0.2604, 'med_EOD': -0.0281, 'big_win%_MFE>50': 33, 'blowup%_MAE<-40': 8}
+  0.45-0.49  {'N': 27, 'win%_eod': 52, 'med_MFE': 0.2447, 'med_MAE': -0.1398, 'med_EOD': 0.0711, 'big_win%_MFE>50': 7, 'blowup%_MAE<-40': 22}
+  score_NA   {'N': 4, 'win%_eod': 50, 'med_MFE': 0.3577, 'med_MAE': -0.5097, 'med_EOD': 0.1223, 'big_win%_MFE>50': 25, 'blowup%_MAE<-40': 75}
+  by route:
+    CROSS_STRIKE       {'N': 22, 'win%_eod': 50, 'med_MFE': 0.1756, 'med_MAE': -0.199, 'med_EOD': 0.0082, 'big_win%_MFE>50': 14, 'blowup%_MAE<-40': 0}
+    PERSISTENT_BUILD   {'N': 5, 'win%_eod': 80, 'med_MFE': 0.2447, 'med_MAE': -0.0469, 'med_EOD': 0.124, 'big_win%_MFE>50': 0, 'blowup%_MAE<-40': 20}
+    ?                  {'N': 4, 'win%_eod': 50, 'med_MFE': 0.3577, 'med_MAE': -0.5097, 'med_EOD': 0.1223, 'big_win%_MFE>50': 25, 'blowup%_MAE<-40': 75}
+    SHAKEOUT_RECOVERY  {'N': 4, 'win%_eod': 25, 'med_MFE': 0.4692, 'med_MAE': -0.9722, 'med_EOD': -0.9722, 'big_win%_MFE>50': 0, 'blowup%_MAE<-40': 75}
+    FORWARD_POSITIONING {'N': 4, 'win%_eod': 50, 'med_MFE': 0.4967, 'med_MAE': -0.1244, 'med_EOD': 0.0711, 'big_win%_MFE>50': 25, 'blowup%_MAE<-40': 0}
+    None               {'N': 3, 'win%_eod': 33, 'med_MFE': 0.8548, 'med_MAE': -0.9167, 'med_EOD': -0.0323, 'big_win%_MFE>50': 67, 'blowup%_MAE<-40': 100}
+    FAST_SHOCK         {'N': 1, 'win%_eod': 0, 'med_MFE': 0.12, 'med_MAE': -0.1287, 'med_EOD': -0.0189, 'big_win%_MFE>50': 0, 'blowup%_MAE<-40': 0}
+
+==============================================================================
+HARD-VETO COHORT — false-veto study (did vetoed events go on to move?)
+==============================================================================
+  overall vetoed (with bars): {'N': 600, 'win%_eod': 25, 'med_MFE': 0.329, 'med_MAE': -0.504, 'med_EOD': -0.2756, 'big_win%_MFE>50': 41, 'blowup%_MAE<-40': 60}
+    UNKNOWN                {'N': 600, 'win%_eod': 25, 'med_MFE': 0.329, 'med_MAE': -0.504, 'med_EOD': -0.2756, 'big_win%_MFE>50': 41, 'blowup%_MAE<-40': 60}
+
+NOTE: 'win%_eod' = EOD return > 0; 'big_win%_MFE>50' = peak favourable move > +50% (a candidate we
+      passed that a runner would have caught); 'blowup%_MAE<-40' = drew down past the stop.
+      Forward metrics use ONLY post-decision bars — no look-ahead in any original feature.

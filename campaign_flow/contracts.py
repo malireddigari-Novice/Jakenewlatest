@@ -2,7 +2,7 @@
 
 Eligible: right matches the thesis (calls bullish / puts bearish); expiration survives the planned end plus
 the horizon buffer (1 calendar day for SWING); a contract expiring on the planned-end date cannot be held past
-the expiration liquidation deadline; quote not future-dated and <= 30 s old; bid >= 0, ask > 0, ask >= bid;
+the expiration liquidation deadline; quote not future-dated (beyond the clock tolerance) and <= 30 s old; bid >= 0, ask > 0, ask >= bid;
 relative spread (ask - bid) / mid <= 0.30; ask size >= 1.
 
 Ranking: by externally supplied utility ONLY when every eligible choice has one; otherwise tighter spread.
@@ -37,7 +37,7 @@ def check(choice: dict, direction: str, horizon: str, planned_end_ts: float, now
     ts = q.get('ts')
     if ts is None:
         r.append('QUOTE_MISSING')
-    elif float(ts) > now_ts:
+    elif float(ts) > now_ts + S.QUOTE_CLOCK_TOL_S:
         r.append('QUOTE_FUTURE_DATED')
     elif now_ts - float(ts) > S.QUOTE_MAX_AGE_S:
         r.append('QUOTE_STALE')

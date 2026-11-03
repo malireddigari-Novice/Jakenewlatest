@@ -35,6 +35,15 @@ ck("still DEGRADED during recovery", cv.state('AAPL', 1065 + 179) == 'DEGRADED')
 cv.ok('AAPL', 1065 + 180)
 ck("HEALTHY once the recovery window has elapsed", cv.state('AAPL', 1065 + 180) == 'HEALTHY')
 ck("other tickers unaffected", cv.ok('MSFT', 1000) is None and cv.state('MSFT', 1001) == 'HEALTHY')
+cv2 = coverage.CoverageTracker(gap_s=60, recovery_s=180)
+for t in (0, 17, 34):                                   # normal 17 s cycles, both tickers
+    cv2.ok('AAPL', t); cv2.ok('GOOGL', t); cv2.cycle_done(['AAPL', 'GOOGL'], t)
+ck("a slow-but-normal 44 s cycle is not an incident", cv2.ok('AAPL', 78) is None)
+cv2.cycle_done(['AAPL'], 78)                            # GOOGL's fetch failed this cycle
+inc = cv2.ok('GOOGL', 95)
+ck("a missed cycle is an incident even under gap_s", inc and inc['cause'] == 'MISSED_CYCLE' and inc['missed_cycles'] == 1)
+inc = cv2.ok('AAPL', 160)
+ck("a stalled cycle beyond gap_s is a SLOW_CYCLE incident", inc and inc['cause'] == 'SLOW_CYCLE')
 
 print("── DTE channels (NY calendar days) ──")
 now = at(2026, 10, 16, 10, 0)
@@ -140,6 +149,13 @@ ck("entry: missing calendar shown explicitly",
    any(f['name'] == 'Catalyst' and 'no verified calendar' in f['value'] for f in e['fields']))
 notify.coverage_card({'symbol': 'AAPL', 'gap_s': 60.0, 'gap_start': 1.0}, recovery_s=180, now=now)
 ck("coverage notice is blue and context-only", sent[-1]['color'] == notify._BLUE and 'context only' in sent[-1]['description'])
+n0 = len(sent)
+notify.coverage_card([{'symbol': s, 'gap_s': 63.0, 'gap_start': 2.0} for s in ('AAPL', 'MSFT', 'TSLA')]
+                     + [{'symbol': 'GOOGL', 'gap_s': 80.0, 'gap_start': 2.0, 'missed_cycles': 1}],
+                     recovery_s=180, now=now, cycle_s=41.0, failed=['GOOGL'])
+ck("one stalled cycle → ONE notice naming every ticker and the failed fetch",
+   len(sent) == n0 + 1 and all(s in sent[-1]['title'] for s in ('AAPL', 'MSFT', 'TSLA', 'GOOGL'))
+   and 'fetch failed for GOOGL' in sent[-1]['description'] and 'missed 1 cycle' in sent[-1]['description'])
 
 print("── ledger provenance ──")
 rec = decision_ledger.build_record(now=now, ticker='NVDA', side='CALL', metric={'baseline_quality': 'UNSEEDED',

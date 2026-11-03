@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 import notify
 
+config.LEGACY_DISCORD_ENABLED = True       # these checks exercise the outbox through the legacy card path
+
 fails = 0
 def ck(name, cond):
     global fails

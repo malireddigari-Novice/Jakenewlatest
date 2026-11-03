@@ -30,7 +30,7 @@ class SimBroker:
         if o['status'] == 'CANCEL_REQUESTED':
             return {'status': 'CANCELED', 'filled_qty': o['filled_qty'], 'avg_price': o.get('avg_price')}
         q = pipe._quotes.get(o['occ']) or {}
-        fresh = q.get('ts') is not None and 0 <= ts - q['ts'] <= S.QUOTE_MAX_AGE_S
+        fresh = q.get('ts') is not None and -S.QUOTE_CLOCK_TOL_S <= ts - q['ts'] <= S.QUOTE_MAX_AGE_S
         if fresh and o['side'] == 'buy' and q.get('ask') and q['ask'] <= o['limit_price'] and (q.get('ask_size') or 0) >= 1:
             return {'status': 'FILLED', 'filled_qty': o['qty'], 'avg_price': o['limit_price']}
         if fresh and o['side'] == 'sell' and q.get('bid') and q['bid'] >= o['limit_price'] and (q.get('bid_size') or 0) >= 1:

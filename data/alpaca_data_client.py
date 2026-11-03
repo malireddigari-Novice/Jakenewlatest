@@ -8,7 +8,10 @@ Provides the two things the engine needs every poll:
 The per-poll *delta* of cumulative volume is what `analysis.premium` turns into fresh
 institutional premium — the pool the attention board allocates across the Mag-7.
 """
+import email.utils
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -37,6 +40,9 @@ class AlpacaDataClient:
         self._expiry_cache: dict[str, date] = {}
         self._expiry_cache_date: Optional[date] = None
         self._all_exp_cache: dict[str, list] = {}     # symbol -> sorted [date] (>= today), cached per day
+        # Timing of the most recent successful response ON THIS THREAD (the engine fetches tickers in
+        # parallel): local receipt epoch, and the server's HTTP Date (1 s resolution) — clock skew is visible.
+        self._tl = threading.local()
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -44,10 +50,24 @@ class AlpacaDataClient:
         try:
             r = requests.get(f"{base}{path}", headers=self._h, params=params, timeout=20)
             r.raise_for_status()
-            return r.json()
+            out = r.json()
+            self._tl.recv_ts = time.time()
+            try:
+                self._tl.server_ts = email.utils.parsedate_to_datetime(r.headers['Date']).timestamp()
+            except Exception:
+                self._tl.server_ts = None
+            return out
         except Exception as exc:
             logger.warning("Alpaca GET %s failed: %s", path, exc)
             return None
+
+    @property
+    def last_recv_ts(self) -> Optional[float]:
+        return getattr(self._tl, 'recv_ts', None)
+
+    @property
+    def last_server_ts(self) -> Optional[float]:
+        return getattr(self._tl, 'server_ts', None)
 
     @staticmethod
     def _cst(iso_z: str) -> datetime:

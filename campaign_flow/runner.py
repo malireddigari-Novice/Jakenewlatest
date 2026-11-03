@@ -63,6 +63,10 @@ class Runner:
         self.j = Journal(journal_path)
         broker = AlpacaPaperBroker(exec_client) if mode == 'PAPER' else SimBroker()
         self.pipe = Pipeline(self.j, broker, publish=self._publish)
+        self.sheet = None
+        if mode == 'PAPER' and S.DISCORD_ENABLED:          # the alerts sheet mirrors what was published
+            from campaign_flow import alerts_sheet
+            self.sheet = alerts_sheet.start(self.j.path)
         self.obs_dir = obs_dir or S.OBS_DIR
         self.session = None
         self._contracts = {}           # ticker -> [contract-master rows] for this session
@@ -71,6 +75,7 @@ class Runner:
         self._frozen = set()
         self._opened = set()
         self._fh = None
+        self.polls = 0                 # live polls handed to the pipeline this process (EOD summary)
         logger.info("CAMPAIGN-FLOW %s  rules=%s  journal=%s", mode, S.RULE_VERSION, self.j.path)
 
     # ── observation log ────────────────────────────────────────────────────────
@@ -124,6 +129,8 @@ class Runner:
         import notify
         if notify.enqueue(payload, signal_id=card_id, state_version=S.RULE_VERSION):
             notify.flush()
+        if self.sheet:
+            self.sheet.kick()
 
     # ── REST helpers ───────────────────────────────────────────────────────────
     def _get(self, base, path, params):
@@ -279,37 +286,52 @@ class Runner:
                        'session': p.isoformat()})
 
     # ── per-poll ───────────────────────────────────────────────────────────────
-    def on_poll(self, now: datetime, t: str, spot: float, expiry, snaps: dict, legacy: dict = None) -> None:
-        ts = now.timestamp()
+    @staticmethod
+    def wants_next_expiry(expiry) -> bool:
+        """Observe the next expiration too when the nearest one expires today (overnight carry)."""
+        return S.OVERNIGHT_ENABLED and expiry == cal.ny_day(time.time())
+
+    def on_poll(self, now: datetime, t: str, spot: float, expiry, snaps: dict, legacy: dict = None,
+                timing: dict = None, extra=None) -> None:
+        """`timing` = the engine's per-ticker {poll_start_ts, fetch_start_ts, recv_ts, server_ts}. The observation
+        (and every decision on it) is stamped at recv_ts — when ALL of this ticker's data had arrived. Without
+        timing (an old caller) the cycle start is used and the poll is marked UNRECORDED. `extra` = [(expiry, snaps)] for further
+        observed expirations (the next one, for overnight carry); they join the same poll observation."""
+        ts = float(timing['recv_ts']) if timing and timing.get('recv_ts') else now.timestamp()
+        self.polls += 1
+        tm = {**(timing or {'poll_start_ts': now.timestamp()}),
+              'basis': 'LOCAL_RECEIPT' if timing and timing.get('recv_ts') else 'UNRECORDED'}
         d = cal.ny_day(ts)
         if self.session != d.isoformat():
             self._start_session(d.isoformat())
-        exp = expiry.isoformat() if hasattr(expiry, 'isoformat') else str(expiry)
-        contracts, keys = {}, []
-        for (strike, side), q in snaps.items():
-            right = 'C' if side == 'CALL' else 'P'
-            con = mkcontract(t, right, strike, exp)
-            contracts[con['occ']] = {
-                'right': right, 'strike': float(strike), 'expiry': exp, 'bid': q.get('bid'), 'ask': q.get('ask'),
-                'bid_size': q.get('bid_size'), 'ask_size': q.get('ask_size'), 'quote_ts': _epoch(q.get('quote_ts')),
-                'cum_volume': q.get('volume'), 'trade_px': q.get('trade_px'), 'trade_ts': _epoch(q.get('trade_ts')),
-                'trade_size': q.get('trade_size'), 'trade_cond': q.get('trade_cond'), 'iv': q.get('implied_vol')}
-            keys.append((series_key(con), con['occ']))
-        rows = [r for r in self._contracts.get(t) or [] if r['expiration_date'] == exp]
-        if rows:
-            band = S_band(spot)
-            lst = {'C': sorted(float(r['strike_price']) for r in rows if r['type'] == 'call' and band[0] <= float(r['strike_price']) <= band[1]),
-                   'P': sorted(float(r['strike_price']) for r in rows if r['type'] == 'put' and band[0] <= float(r['strike_price']) <= band[1])}
-            sig = (lst['C'][:1], lst['C'][-1:], lst['P'][:1], lst['P'][-1:], len(lst['C']), len(lst['P']))
-            if self._listing_sig.get((t, exp)) != sig:
-                self._listing_sig[(t, exp)] = sig
-                self.emit({'kind': 'listing', 'ts': ts, 'ticker': t, 'expiry': exp, **lst, 'band': list(band)})
+        contracts, keys, exps = {}, [], []
+        for e, sn in [(expiry, snaps)] + list(extra or []):
+            exp = e.isoformat() if hasattr(e, 'isoformat') else str(e)
+            exps.append(exp)
+            for (strike, side), q in sn.items():
+                right = 'C' if side == 'CALL' else 'P'
+                con = mkcontract(t, right, strike, exp)
+                contracts[con['occ']] = {
+                    'right': right, 'strike': float(strike), 'expiry': exp, 'bid': q.get('bid'), 'ask': q.get('ask'),
+                    'bid_size': q.get('bid_size'), 'ask_size': q.get('ask_size'), 'quote_ts': _epoch(q.get('quote_ts')),
+                    'cum_volume': q.get('volume'), 'trade_px': q.get('trade_px'), 'trade_ts': _epoch(q.get('trade_ts')),
+                    'trade_size': q.get('trade_size'), 'trade_cond': q.get('trade_cond'), 'iv': q.get('implied_vol')}
+                keys.append((series_key(con), con['occ']))
+            rows = [r for r in self._contracts.get(t) or [] if r['expiration_date'] == exp]
+            if rows:
+                band = S_band(spot)
+                lst = {'C': sorted(float(r['strike_price']) for r in rows if r['type'] == 'call' and band[0] <= float(r['strike_price']) <= band[1]),
+                       'P': sorted(float(r['strike_price']) for r in rows if r['type'] == 'put' and band[0] <= float(r['strike_price']) <= band[1])}
+                sig = (lst['C'][:1], lst['C'][-1:], lst['P'][:1], lst['P'][-1:], len(lst['C']), len(lst['P']))
+                if self._listing_sig.get((t, exp)) != sig:
+                    self._listing_sig[(t, exp)] = sig
+                    self.emit({'kind': 'listing', 'ts': ts, 'ticker': t, 'expiry': exp, **lst, 'band': list(band)})
         try:
             self._prior_bars(keys, ts, d)
         except Exception:
             logger.warning("CAMPAIGN-FLOW prior-bar fetch failed for %s", t, exc_info=True)
-        self.emit({'kind': 'poll', 'ts': ts, 'ticker': t, 'spot': spot, 'expiries': [exp], 'feed': 'opra',
-                   'contracts': contracts, 'legacy': legacy or {}})
+        self.emit({'kind': 'poll', 'ts': ts, 'ticker': t, 'spot': spot, 'expiries': exps, 'feed': 'opra',
+                   'contracts': contracts, 'legacy': legacy or {}, 'timing': tm})
 
 
 def S_band(spot):

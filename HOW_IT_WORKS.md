@@ -120,7 +120,7 @@ crossed?"; it asks whether a campaign is being born.
 | **8:20 – 8:30** | **Pre-open seeding.** Reads every contract every few seconds and records volume baselines — no trading. This is what lets the engine measure the opening auction as *fresh* flow instead of discarding it. |
 | **8:30** | **Open.** Fresh volume counts from the first seconds, including the opening burst (often the clearest institutional commitment of the day). |
 | **8:30 – 8:35** | **Opening window** — trading is live but the quality floors are raised ~1.4×. |
-| **8:35 → 2:55 PM** | Full-speed. The loop runs every **~5 seconds**, scoring over rolling **30s / 60s / 180s** windows. |
+| **8:35 → 2:55 PM** | Full-speed. Each cycle fetches the Mag-7 **in parallel** (~1.7 s), processes them, then sleeps **5 s**; scoring runs over rolling **30s / 60s / 180s** windows. |
 | **2:55 PM** | End-of-day flatten — everything closed (same-day convexity is never carried). |
 
 **Expiry is dynamic** — each name uses its true nearest listed expiry (0DTE when it exists, else
@@ -767,8 +767,10 @@ stays 0.55):
   in `[NEAR_MISS_MIN_SCORE 0.45, 0.55)` with no hard veto, qualified control, low distribution, a
   non-EXTENDED/MATURE ValueState, and an approved route posts a Discord amber card ("RESEARCH ONLY —
   no order") with score/shortfall/top-drag/value/control. Throttled per (ticker,side). Restores
-  visibility and collects live evidence on whether 0.50–0.54 events convert.
-- **Items 3/6 — EOD attrition report.** `ATTRITION-REPORT` logs (+ Discord) the entry funnel
+  visibility and collects live evidence on whether 0.50–0.54 events convert. **Discord cards OFF since
+  2026-10-25** (`NEAR_MISS_ALERT_ENABLED=false`); the near-miss funnel counts still land in the EOD
+  ATTRITION-REPORT log.
+- **Items 3/6 — EOD attrition report.** `ATTRITION-REPORT` logs the entry funnel (Discord EOD cards — campaign-flow + legacy — OFF since 2026-10-25, `EOD_DISCORD_ENABLED=false`; the `CF-EOD` lines stay in the log)
   **ACTIVE_EVENT(evaluated) → QUALIFIED_CAMPAIGN(no-veto) → ENTRY_READY → ENTERED**, plus hard-veto
   counts by family and near-miss counts by route — so we see exactly where candidates are lost.
 
@@ -1192,7 +1194,7 @@ Backtest backtest.py [N weeks] [--quiet]            replay real option bars, mul
 | `TRAIL_REQUIRE_TP1` | true | trail owns the position only **after** TP1 (no pre-TP1 premium stop; AMZN 08/28 fix) |
 | `STOP_LOSS_PCT` | 0.40 | hard stop-loss (risk backstop) |
 | `ENTRY_CUTOFF_BUFFER_MIN` | 15 | no new entries within this many min of the flatten |
-| `FAST_POLL_SECONDS` | 5 | loop cadence |
+| `FAST_POLL_SECONDS` | 5 | sleep between poll cycles (a cycle = parallel Mag-7 fetch + processing) |
 | `ALPACA_ENABLED` / `ALPACA_PAPER` | **true** / true | **ACTIVE on paper** (real orders, simulated money) |
 | `SHEETS_ENABLED` | **true** | log every entry/scale/exit to the Google Sheet (ported from Jakevolume) |
 | `GOOGLE_SPREADSHEET_ID` / `GOOGLE_SERVICE_ACCOUNT_FILE` | (shared) | same workbook + service account as Jakevolume; Jakenew writes only its `Jakenew_Trades` tab |
@@ -1298,10 +1300,12 @@ entry cutoff 11:40 CT, and the late-0DTE theta ramp spans the real 210-minute se
 
 **Feed coverage (`analysis/coverage.py`, `COVERAGE_*`).** Fresh flow is `cum(b) − cum(a)`; after a feed
 gap the next window lumps the whole gap into one read, which looks like a fake shock. A ticker with no usable
-ingest for > `COVERAGE_GAP_S` (30s) has a coverage incident; once data resumes it stays DEGRADED for
-`COVERAGE_RECOVERY_S` (180s) and `_open_wave` rejects new entries with `COVERAGE_DEGRADED`. Exits and
-management still run. Gaps ≥ `COVERAGE_NOTIFY_MIN_GAP_S` (60s) post a 🔵 FEED GAP notice. Backtest uses a
-150s gap threshold for its 1-minute cadence.
+ingest for > `COVERAGE_GAP_S` (**60s** since 2026-10-19; was 30s, below the real cycle) or that **missed a
+completed poll cycle** (fetch failed / empty / all dropped) has a coverage incident, measured on the ticker's own
+data-receipt time. Once data resumes it stays DEGRADED for `COVERAGE_RECOVERY_S` (180s) and `_open_wave` rejects
+new entries with `COVERAGE_DEGRADED`. Exits and management still run. Gaps ≥ `COVERAGE_NOTIFY_MIN_GAP_S` (60s)
+post **one** 🔵 FEED GAP notice per cycle listing every affected ticker and the cause (which fetch failed, how
+long the cycle waited). Backtest uses a 150s gap threshold for its 1-minute cadence.
 
 **Missing history ≠ zero (`analysis/mass.py`).** The per-ticker abnormality z is 0 on an empty baseline.
 That means "no evidence", not "measured normal", so the output now carries `baseline_n` and
@@ -1552,9 +1556,15 @@ available. The pipeline only reads those observations, so a replay reproduces th
   - Contract checks: right matches the direction; the expiry outlives the planned end (SWING +1 day); the
     quote <= 30 s old; relative spread <= 0.30; ask size >= 1.
   - Reference budget: $2,000, at most 2 contracts per proposal.
-  - Daily cap: 2 proposals per ticker per New York day; cancelled proposals still count.
+  - Daily cap: **5** proposals per ticker per New York day (`CF_MAX_PROPOSALS_PER_TICKER_DAY`; the spec says 2,
+    raised to 5 on 2026-10-25); cancelled proposals still count.
+  - **Since 2026-11-01 (Mag 7 brief):** at most **one call and one put entry per day across the Mag 7**
+    (`DAILY_CALL_PUT_ENTRY_CAP`), and the cluster must reach **CONFIRMED conviction**
+    (`CONVICTION_NOT_CONFIRMED:<tier>`). See *Mag 7 adjustments brief* below.
   - The old 0.550 route score is only logged (`VERIFIED_CLUSTER_BELOW_SCORE_BOUNDARY`).
-  - Horizon: INTRADAY by default; the planned end is 15:30 NY.
+  - Horizon: INTRADAY by default; the planned end is 15:30 NY. OVERNIGHT is chosen only by the carry rule in
+    *Mag 7 adjustments brief* (flow in the next expiration on a consolidated day).
+  - A cluster selects contracts only in its own expiration.
 - §9/§10 **OI reference:**
   - Before the cutoff, the contract master (OI with its as-of date) is fetched.
   - The nearest expiration is frozen once per session between open - 10 min and the open. A late run records
@@ -1563,16 +1573,21 @@ available. The pipeline only reads those observations, so a replay reproduces th
   - Levels: the three largest OI nodes among the six nearest eligible strikes on each side of the fixed open.
   - Zones for clusters exist only in the journal; OI never gates entries or exits.
 - §11/§12 **Management:**
-  - **No exit** for premium dips, lower lows, board changes, pauses, vague exhaustion, OI touches,
-    +60%/+150% gains or trailing thresholds.
+  - **No exit** for premium dips, lower lows, board changes, pauses, vague exhaustion, OI touches or
+    +60%/+150% gains. (Since 2026-11-01 one trailing stop exists: armed at +100%, exits after giving back 60% of
+    the peak gain; see *Mag 7 adjustments brief*.)
   - **No default stop.** `CF_PREMIUM_LOSS_LIMIT` and `CF_UNDERLYING_INVALIDATION_PCT` are off unless set
     before entry.
   - **Full-exit requests, in priority order:**
-    1. Favorable overnight underlying gap.
+    1. Overnight underlying gap at the first open after entry: favorable sells all; adverse by >= 1% exits;
+       otherwise the carried position is reviewed at open + 15 min.
     2. Planned or expiry deadline: 15:30 NY, earlier on a half day.
     3. Precommitted risk limit.
-    4. Confirmed opposite one-sided cluster with bearish/bullish underlying, using flow after this
+    4. Trailing stop from the peak (+100% arm, 60% giveback).
+    5. Confirmed opposite one-sided cluster with bearish/bullish underlying, using flow after this
        campaign's entry only. A turnover-matched cluster also needs independent unmatched follow-through.
+       Since 2026-11-01 the opposite side must also be CONFIRMED with a score >= 1.2 x the entry bar, and the
+       position must have been held >= 15 min.
 - §13/§14 **Orders and lifecycle:**
   - An exit intent persists through unusable quotes (`EXIT_PENDING_EXECUTABLE_QUOTE`) and partial fills.
   - States: PROPOSED -> ACTIVE -> ENTRY_PENDING / CLOSED / CANCELLED. Fills update the weighted average entry;
@@ -1580,9 +1595,10 @@ available. The pipeline only reads those observations, so a replay reproduces th
   - An opposite entry waits until the source campaign is fully CLOSED, then becomes a new campaign that
     references it. While an opposite campaign is open, only this rotation path may enter the other side.
   - Orders use idempotent client ids (`cf-<campaign>-E`, `-X<n>`), and every event runs exactly once.
-- §15 **Cards:** ENTRY_PROPOSED / ENTRY_FILLED / EXIT_PROPOSED / EXIT_FILLED, with the exact footer and
-  mention-safe fields. Samples are in `docs/CAMPAIGN_FLOW_CARD_SAMPLES.md`. Cards are published only in
-  PAPER mode with `CF_DISCORD_ENABLED=true`; SIM fills are never published.
+- §15 **Cards:** ENTRY_PROPOSED / ENTRY_FILLED / EXIT_PROPOSED / EXIT_FILLED, mention-safe fields. Cards are
+  published only in PAPER mode with `CF_DISCORD_ENABLED=true`; SIM fills are never published. Since 2026-11-01
+  **only the FILLED cards are posted** (proposals stay in the journal) and the wording is neutral; see *Mag 7
+  adjustments brief*. (`docs/CAMPAIGN_FLOW_CARD_SAMPLES.md` shows the earlier format.)
 - §16 **Journal:** `jakenew_campaign_flow.db` (schema `cf-journal-1`; an unknown schema is refused) holds:
   - windows with every rejection reason, value provenance, the board, candidates and WATCH reasons
   - proposals, orders, fills and reconciliation exceptions
@@ -1613,3 +1629,191 @@ polls resume; re-delivered polls are rejected as duplicates.
   in this engine's log for **2026-10-15**. `cf_report.py 2026-10-15` lists them: 5 of 6 exits used reasons
   this policy removes. No synchronized tape for that day exists to replay the new policy over it.
 
+## Decision-time semantics, parallel fetch, ops reporting (2026-10-19)
+
+**The bug.** On 2026-10-19 every campaign-flow candidate (162 evaluations, 34 unique) was WATCH with
+`INCOMPLETE_TRADE_QUOTE_OR_EXPIRY_COVERAGE` + `NO_SUITABLE_CONTRACT` (`QUOTE_FUTURE_DATED`). Each poll was stamped
+at the **cycle start**, before any ticker was fetched; tickers were then fetched one after another (~1.5 s each),
+so 77% of quotes (154,771 / 200,076) carried a time later than their poll — median +6.3 s, max +32 s, growing
+~1.5 s per fetch position. Not a clock, units or timezone problem: local clock +0.05 s vs NTP, Alpaca's HTTP
+Date agrees within its 1 s resolution, and the leads are seconds, not hours. `python cf_replay.py <day>
+--evidence 8` prints the per-candidate table (cycle start, quote time, lead, estimated receipt, decision).
+
+**The fix.**
+- `engine._ingest_all` fetches the Mag-7 **in parallel** (one worker per ticker; ~7.7 s → ~1.7 s, receipts
+  within ~0.1 s of each other) and still processes them sequentially in `MAG7` order.
+- Each ticker's poll is stamped at the **local receipt of its last response** (`timing.recv_ts`). The
+  observation keeps `poll_start_ts`, `fetch_start_ts`, `recv_ts` and the server `Date`
+  (`basis: LOCAL_RECEIPT`).
+- Campaign-flow decides at that time. Quotes that are genuinely future-dated (leading the decision time by more
+  than `CF_QUOTE_CLOCK_TOL_S`, 0.25 s) or stale (> 30 s) are still rejected. Any remaining future quotes are
+  counted in the snapshot evidence and journaled as `QUOTE_TIMING`.
+- **Replay** (`cf_replay.py`): polls recorded before the fix have no receipt time, so they are re-stamped at the
+  newest quote/trade time in the poll + 1 s, capped below the next cycle start. Original stamps are kept;
+  `--as-recorded` reproduces the live result as a control.
+
+**Replay of 2026-10-19 (`cf_replay.py 2026-10-19 --both`).**
+- The **control** (original stamps) reproduces live exactly: 162 evaluations, 34 unique, 0 pass coverage,
+  0 proposals.
+- The **re-stamped** replay gives 215 evaluations (60 unique). **196 of 206 WATCH now pass coverage**, and
+  there are **9 proposals**.
+- Where the WATCH evaluations stop first: coverage 10, contested clustering 12, underlying not confirmed 91,
+  risk/caps 93. The caps are `DAILY_ENTRY_PROPOSAL_CAP` 185 and opposite campaign open 14. No contract-
+  liquidity or expiry failures remain.
+- 1049 extra rows are rotation re-checks of closed campaigns. The rotation path evaluates every window close
+  even with no opposite cluster; that is journal noise worth trimming.
+- Under the simulated broker, the 6 closed campaigns realized −$1,160. Three 0DTE campaigns never found a bid
+  at the 14:30 deadline. That is one session with uncalibrated thresholds: not an edge claim either way.
+
+**Feed gaps.** The 2026-10-19 cards showing 63 s across six tickers and 80 s for GOOGL were a single stall.
+The GOOGL snapshot request failed after retries at 14:20:27, the sequential cycle waited on it, and GOOGL missed
+that cycle entirely. Separately, 2352 "incidents" that day were normal 38–44 s cycles (the once-a-minute
+multi-expiry reads) tripping a 30 s threshold. See *Feed coverage* above for the new rule.
+
+**EOD summary.** With `CF_MODE` on, the EOD Discord summary now leads with the **campaign-flow** funnel from its
+own journal (`campaign_flow/summary.py`): windows / invalid reasons → eligible / accepted shocks → candidate
+evaluations (unique) → WATCH reasons and contract-level reasons → proposals → orders → fills → cards (published)
+→ outbox. The legacy attrition line follows, labelled compute-only in PAPER mode; that is where the old
+all-zero summary came from.
+
+**Paper workflow test.** `test_cf_paper_e2e.py` runs synthetic, labelled test data through the real Runner
+(PAPER), AlpacaPaperBroker, journal, cards and `notify` outbox. An Alpaca-paper REST double and a local
+Discord-style webhook stand in for the outside world. It checks:
+- proposal → order → fill → campaign → delivered card;
+- a mid-session restart (rebuild from `cf_obs`);
+- 30 re-delivered polls;
+- repeated broker fill reads;
+- a re-emitted card (no duplicate order, fill or post).
+
+**Open adapter question (not changed):** 12,079 windows on 2026-10-19 were rejected `INVALID_LARGEST_PRINT`. The
+newest print's size exceeded the window's cumulative-volume increase, which suggests the snapshot `dailyBar`
+volume lags `latestTrade`.
+
+
+## Mag 7 adjustments brief (2026-11-01) — `mag7-algo-adjustments-brief.pdf`, Oct 30 paper session
+
+The owner's brief listed seven refinements. Each is handled as follows; items marked **[owner]** use a
+documented default until the owner answers the brief's open questions.
+
+1. **Overnight holds on any weekday** (`CF_OVERNIGHT_*`). Why only Tue/Thu before: the Mag 7 list Mon/Wed/Fri
+   expirations, and the engine polls only the nearest one. Tue/Thu contracts are 1DTE, Mon/Wed/Fri contracts
+   are 0DTE, and campaign-flow ran every trade INTRADAY anyway. Now, when the nearest expiration expires today,
+   `engine._fetch_one` also fetches the **next expiration**, which joins the same `cf_obs` poll. A verified,
+   CONFIRMED cluster **in that later expiration** becomes an **OVERNIGHT** proposal when:
+   - it is >= 12:00 NY;
+   - the day is consolidated (session high-low <= 2% of the open); **[owner: carry conditions]**
+   - carried premium across positions stays <= $600 (`OVERNIGHT_PREMIUM_CAP`).
+
+   Otherwise it is journaled as `OVERNIGHT_NOT_TAKEN` and not traded. Same-day flow keeps trading INTRADAY in
+   its 0DTE contract, and Tue/Thu behaviour is unchanged. A 0DTE contract can never be picked for an overnight
+   plan. Clusters now select contracts only in their own expiration.
+   - **Review at the next open:** a favorable gap sells all (as before). An adverse gap >= 1% exits
+     (`ADVERSE_OPEN_GAP_CARRY_REVIEW`). At open + 15 min, a carried position that is not in profit, and whose own
+     side is not at least BUILDING, exits (`OVERNIGHT_OPEN_REVIEW_NO_CONTINUATION`). The expiry-day 15:30
+     deadline still applies.
+   - **Cards:** the entry card says "Overnight position (may be carried past the close; gap risk)". Next-day
+     exit cards say "Carried overnight from <day>".
+   - **Proof is forward only:** recorded `cf_obs` sessions before 2026-11-02 contain only the nearest expiration,
+     so no replay of past data can show a Mon/Wed/Fri carry.
+2. **Old-format alerts.** The "ENTER … / Exit plan / attention board / Jakenew Attention Engine · SHADOW" cards
+   were this bot's **legacy engine**, which still posted while compute-only. The 10-30 GOOGL PUT 280 @ $1.29
+   09:57 ET card matches its `[SHADOW] ENTER` log line. Every legacy post (entry/scale/exit/flip/coverage/
+   near-miss/strengthening/legacy EOD) is now behind `LEGACY_DISCORD_ENABLED` (default **false**). Every
+   main-webhook post goes out as **"Mag 7 Algo"** (`DISCORD_USERNAME`). Note: **Jakevolume's `.env` holds the
+   same webhook URL**, and its `Jakevolume_DailyRun` task is enabled. That is a second process holding the
+   credentials; rotating the webhook fixes both.
+3. **No "awaiting fill" cards.** Only ENTRY_FILLED / EXIT_FILLED are published (`CF_PUBLISH_PROPOSED=false`).
+   Proposals are journaled with `published=0`; a proposal that never fills posts nothing. The card shows the
+   fill price, not the indicative quote.
+4. **One call and one put entry per day** (`CF_MAX_ENTRIES_PER_RIGHT_DAY=1`, `CF_ENTRY_CAP_SCOPE=ALL`,
+   reason `DAILY_CALL_PUT_ENTRY_CAP`). **[owner: across all names or per ticker]** Rules:
+   - Every proposal that reserves or reached a fill counts. One cancelled unfilled frees its slot.
+   - A stop-out does not reopen the slot.
+   - A rotation entry uses the slot.
+   - An overnight carry counts on the day it was opened.
+   - Exits follow their entry.
+5. **Conviction tiers** (`campaign_flow/conviction.py`, `CF_CONV_*`). A verified cluster says where flow
+   concentrated. Conviction asks whether it looks institutional. It is computed per ticker and right, over the
+   last 10 min, summed across all near-the-money strikes (|K/spot-1| <= 3%) and observed expirations:
+   - size vs the same-time-of-day prior-session baseline (>= 3x);
+   - per-window volume vs the side's median window earlier today (>= 2x; unscored until 5 windows exist);
+   - persistence: consecutive latest windows >= 2x baseline (>= 3);
+   - near-ask share (>= 0.25: the snapshot proxy runs 0.1-0.35 on real flow);
+   - premium dominance over the other side (>= 0.6);
+   - share of volume in windows whose option mid rose (>= 0.5).
+
+   Each component scores min(1.5, value/threshold)/1.5, and the score is the mean x 100.
+   - **CONFIRMED** = score >= 65 with the size, persistence and $250k premium gates.
+   - **BUILDING** = score >= 45 with size >= 2x.
+   - Otherwise **WEAK**.
+
+   Entries need CONFIRMED (`CONVICTION_NOT_CONFIRMED:<tier>`). The inputs are journaled on every candidate and
+   exit decision.
+   - **Calibration (replay of 2026-10-30 TSLA):** the owner's good moments scored 66-93 (09:45-09:49 call
+     flow; 11:05-11:12 put flow). The rejected ones scored 37-57 (the 13:22 "opposite call cluster"; the
+     13:24-13:26 397.5C alert).
+   - **[owner: more labelled examples]** The 14:30 clustering the owner pointed to is not in the data: the
+     process stopped at 14:16 ET that day.
+6. **Exits hold longer on weak opposite flow:**
+   - **Opposite-cluster rotation:** needs the opposite side CONFIRMED with a score >= 65 x 1.2 = 78
+     (hysteresis), and >= 15 min held (`CF_MIN_HOLD_S`). It logs `ROTATION_BELOW_EXIT_CONVICTION` /
+     `ROTATION_WITHIN_MIN_HOLD` otherwise.
+   - **Trailing stop:** in exchange, one is armed at +100% and exits after a 60% giveback of the peak gain
+     (`TRAILING_STOP_FROM_PEAK`). That was calibrated on the 10-30 395C bid path, which dipped 4.35 -> 3.15
+     before running to 8.55. A 50%/40% trail sold it at 10:03 for +51%.
+7. **Wording.** Member cards changed as follows:
+   - Titles are "Model opened / closed / reduced a simulated position".
+   - "Simulated fill" replaces "Actual fill".
+   - "Planned contracts" and "Exit plan" are removed.
+   - Campaign ids are hidden (`CF_CARD_SHOW_CAMPAIGN_ID`).
+   - The footer is "Education only · Paper simulation · Options can lose 100% · Not investment advice."
+   - The return % stays in the journal (`CF_CARD_SHOW_RETURN=false`) pending attorney review. When enabled it
+     is labelled "Simulated option return … (paper fills, fees excluded)".
+
+   **Not code:** rotate the webhook URLs, since they appear in screenshots. Moving them to AWS Secrets Manager is
+   an ops decision; the bot reads them from `.env`.
+
+**Stopped-process reconciliation.** On 2026-10-30 the process stopped at 14:16 ET. Seven 10-30 campaigns (and an
+AAPL 10-21 put pending since 10-21) were left ACTIVE in the journal, still reserving capacity. At each new
+session, `Router.reconcile_prior_sessions` handles them:
+- An earlier session's unfilled proposal is cancelled.
+- A campaign whose contract already expired is closed with `CONTRACT_EXPIRED_WHILE_UNMANAGED`
+  (`RECONCILIATION_EXCEPTION`, no card).
+- A live overnight carry is left to management.
+- Check the Alpaca paper account for any exercised ITM contracts from that day.
+
+**Tests:** `test_mag7_brief.py` (synthetic data) covers all of the above. The base-spec suites pin the new gates
+off.
+
+## Mag 7 Algo alerts Google Sheet (2026-11-02) — `campaign_flow/alerts_sheet.py`
+
+Every campaign-flow card published to Discord gets one row in its own Google spreadsheet, separate from the
+legacy "Trading Log". It uses the same service account (`GOOGLE_SERVICE_ACCOUNT_FILE`), so share the sheet with
+that account's email as Editor.
+
+**Settings:**
+- `ALERTS_SHEET_ENABLED`, off by default.
+- `ALERTS_SPREADSHEET_ID`.
+- `ALERTS_SHEET_TAB`, default `Alerts`.
+- `ALERTS_SHEET_FROM`, default `2026-11-03`. It is the first New York session written.
+
+**Columns:**
+- Date and time (ET), ticker.
+- Alert: Opened, Reduced or Closed.
+- Contract, side, expiry and horizon.
+- Simulated fill, contracts, contracts still held, and average entry.
+- Exit rows only: simulated return and P&L, written as sheet formulas.
+- Exit reason and the entry conviction (tier and score).
+- The exact posted card text and the card ID.
+
+Return, P&L and conviction stay off member cards (brief item 7). The sheet is an operator log.
+
+**Durable:**
+- The journal is the source of truth. `_card` stores the fill fields with the journaled card, under the
+  `sheet` key, and never sends them to Discord.
+- Each sync appends, oldest first, the published cards whose card ID is not already in the sheet.
+- A sync runs at start-up and after every published card, in a daemon thread on a read-only sqlite connection.
+  If a sync fails, it retries with backoff of up to 10 minutes.
+- A Google outage or a restart therefore never loses or duplicates a row.
+- To run a sync by hand: `python -m campaign_flow.alerts_sheet`.
+- Covered by `test_alerts_sheet.py`.

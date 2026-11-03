@@ -134,6 +134,8 @@ def enqueue(payload: dict, *, signal_id: str, state_version: str = '1', alias: s
     if not _url(alias):
         return None
     payload = {**payload, 'allowed_mentions': {'parse': []}}     # never @everyone / @here / roles
+    if alias in (None, 'main') and config.DISCORD_USERNAME:
+        payload['username'] = config.DISCORD_USERNAME
     ev = _evidence_hash(payload)
     ch = _channel(alias)
     key = idempotency_key(signal_id, state_version, ev, ch)
@@ -251,7 +253,11 @@ def outbox_stats() -> dict:
 # ── low-level ─────────────────────────────────────────────────────────────────
 
 def _post(embed: dict, *, signal_id: str = None) -> None:
-    """Queue an embed card and try to deliver it now (it stays PENDING for the next flush on failure)."""
+    """Queue an embed card and try to deliver it now (it stays PENDING for the next flush on failure).
+    Every caller is a legacy attention-engine card: dropped unless LEGACY_DISCORD_ENABLED."""
+    if not config.LEGACY_DISCORD_ENABLED:
+        logger.debug("notify: legacy card not posted (LEGACY_DISCORD_ENABLED=false): %s", embed.get('title'))
+        return
     sid = signal_id or f"{embed.get('title', '')}|{datetime.now().date().isoformat()}"
     if enqueue({'embeds': [embed]}, signal_id=sid):
         flush()
@@ -388,18 +394,32 @@ def near_miss_card(*, sym: str, side: str, strike, route: str, score: float, thr
     })
 
 
-def coverage_card(inc: dict, *, recovery_s: float, now: datetime) -> None:
-    """🔵 feed-degradation notice — a ticker's data feed had a gap; its inference is paused (context only)
-    until the fresh-flow windows refill. Visible so a quiet ticker is not mistaken for a quiet tape."""
+def coverage_card(incs, *, recovery_s: float, now: datetime, cycle_s: float = None, failed=()) -> None:
+    """🔵 feed-degradation notice — ONE card per poll cycle listing every ticker whose data had a gap; their
+    inference is paused (context only) until fresh-flow windows refill. Names the cause: the poll cycle ends
+    with its slowest fetch, so one failed/slow request lengthens the gap for every ticker in that cycle."""
+    incs = [incs] if isinstance(incs, dict) else list(incs)
+    if not incs:
+        return
+    rows = '\n'.join(f"`{i['symbol']:<5}` {i['gap_s']:.0f}s"
+                     + (f" — missed {i['missed_cycles']} cycle(s)" if i.get('missed_cycles') else '')
+                     for i in incs)
+    if failed:
+        cause = f"fetch failed for {', '.join(failed)}"
+        cause += f"; the cycle waited {cycle_s:.0f}s for it, delaying every ticker's next read" if cycle_s else ''
+    elif cycle_s:
+        cause = f"slow poll cycle ({cycle_s:.0f}s) — no fetch failed"
+    else:
+        cause = "gap in usable option data"
+    names = ' '.join(i['symbol'] for i in incs)
     _post({
-        'title': f"🔵 FEED GAP  {inc['symbol']}  {inc['gap_s']:.0f}s",
-        'description': (f"No usable option data for **{inc['gap_s']:.0f}s**. New entries on "
-                        f"{inc['symbol']} are paused for {recovery_s:.0f}s while flow windows refill — "
-                        f"reads across the gap are **context only**."),
+        'title': f"🔵 FEED GAP  {names}  {max(i['gap_s'] for i in incs):.0f}s",
+        'description': (f"{rows}\n\n**Cause:** {cause}.\nNew entries on these tickers are paused for "
+                        f"{recovery_s:.0f}s while flow windows refill — reads across the gap are **context only**."),
         'color': _BLUE,
         'footer': {'text': f"Jakenew · coverage notice · {RESEARCH_FOOTER}"},
         'timestamp': now.astimezone().isoformat(),
-    }, signal_id=f"coverage|{inc['symbol']}|{inc['gap_start']}")
+    }, signal_id=f"coverage|{names}|{min(i['gap_start'] for i in incs)}")
 
 
 def flip_card(*, ticker: str, from_side: str, to_side: str, events, strikes, reason: str,

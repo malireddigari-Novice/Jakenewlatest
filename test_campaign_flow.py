@@ -8,6 +8,11 @@ from datetime import date, datetime
 import pytz
 
 os.environ.setdefault('CF_MODE', 'SHADOW')
+# These checks cover the base spec. The Mag 7 brief additions (conviction tiers, daily call/put cap,
+# trailing stop, overnight carry) are pinned off here and covered by test_mag7_brief.py.
+for _k, _v in (('CF_CONV_ENABLED', 'false'), ('CF_MAX_ENTRIES_PER_RIGHT_DAY', '0'),
+               ('CF_TRAIL_ARM_GAIN', '0'), ('CF_OVERNIGHT_ENABLED', 'false')):
+    os.environ.setdefault(_k, _v)
 from campaign_flow import board as boardmod
 from campaign_flow import calendar_ny as cal
 from campaign_flow import cards
@@ -256,10 +261,12 @@ check(38, R.propose(cand('e1', ts, call_cluster(T0)))['duplicate'], 'duplicate c
 check(8, r['contract']['strike'] == 345.0 and r['qty'] == 2, 'tighter relative spread chosen; planned qty within budget')
 c = j.campaign(r['campaign_id'])
 check(8, c['reservation'] == 2 * 2.1 * 100 and abs(R.used_capacity() - 420.0) < 1e-6, 'ask x qty x 100 reserved')
+_cap, S.MAX_PROPOSALS_PER_TICKER_DAY = S.MAX_PROPOSALS_PER_TICKER_DAY, 2   # spec value; live default is 5
 r3 = R.propose(cand('e2', ts + 1, call_cluster(T0)))
 r4 = R.propose(cand('e3', ts + 2, call_cluster(T0)))
+S.MAX_PROPOSALS_PER_TICKER_DAY = _cap
 check(36, r3['decision'] == 'PROPOSE' and r4['decision'] == 'WATCH' and 'DAILY_ENTRY_PROPOSAL_CAP' in r4['reasons'],
-      'two entry proposals per ticker per NY day (cancelled ones count)')
+      'daily cap: two entry proposals per ticker per NY day at cap 2 (cancelled ones count)')
 ch_stale = cand('e-st', ts, call_cluster(T0))
 ch_stale['choices'] = [choice(345.0, ts - 31)]
 j2 = jr()
@@ -496,12 +503,22 @@ print('── §15 cards ──')
 camp = {'campaign_id': '8f3a1b2c9d', 'direction': 'BULLISH', 'contract': contract('AAPL', 'C', 345, '2026-10-16')}
 t_card = NY.localize(datetime(2026, 10, 16, 10, 2)).timestamp()
 p = cards.text(cards.render('ENTRY_PROPOSED', camp, ts=t_card, price=2.90, qty=2))
-check(3, 'PROPOSED · awaiting fill' in p and 'Indicative quote $2.90' in p and 'Planned contracts 2' in p
-      and '10:02 ET' in p and p.endswith(cards.FOOTER), 'proposal card: indicative quote, planned contracts, NY time')
+check(3, 'proposed a simulated position (not filled)' in p and 'Indicative quote $2.90 · Contracts 2' in p
+      and 'Planned contracts' not in p and '10:02 ET' in p and p.endswith(cards.FOOTER),
+      'proposal card (journal only): indicative quote, contracts, NY time — no "Planned contracts"')
 x = cards.text(cards.render('EXIT_FILLED', camp, ts=t_card + 420, price=2.54, qty=2, avg_entry=2.90,
                             reasons=['CONFIRMED_OPPOSITE_CLUSTER_ROTATION']))
-check(3, 'Actual fill $2.54' in x and 'Option return -12.4% (fills)' in x and 'Confirmed opposite put cluster' in x,
-      'exit card: actual fill and fill-based return')
+check(3, x.startswith('Model closed a simulated position') and 'Simulated fill $2.54' in x and 'Actual' not in x
+      and 'return' not in x and 'Campaign' not in x and 'Confirmed opposite put flow' in x,
+      'exit card: neutral title, simulated fill, no return or campaign id by default')
+S.CARD_SHOW_RETURN = True
+x = cards.text(cards.render('EXIT_FILLED', camp, ts=t_card + 420, price=2.54, qty=2, avg_entry=2.90,
+                            reasons=['CONFIRMED_OPPOSITE_CLUSTER_ROTATION']))
+S.CARD_SHOW_RETURN = False
+check(3, 'Simulated option return -12.4% (paper fills, fees excluded)' in x,
+      'with CF_CARD_SHOW_RETURN the fill-based return is labelled simulated')
+check(3, cards.FOOTER.startswith('Education only') and 'Not investment advice' in cards.FOOTER,
+      'footer: education only, paper simulation, not investment advice')
 try:
     cards.render('EXIT_FILLED', camp, ts=t_card, price=2.54, qty=2)
     ok = False
@@ -517,7 +534,8 @@ check(3, ok and cards.render('ENTRY_FILLED', camp, ts=t_card, price=1, qty=1)['a
       'mention injection refused; automatic mention parsing disabled')
 px = cards.text(cards.render('EXIT_FILLED', camp, ts=t_card, price=2.5, qty=1, avg_entry=2.0, partial_remaining=1,
                              reasons=['PLANNED_OR_EXPIRY_EXIT_DEADLINE']))
-check(3, 'Partial execution: 1 executed, 1 still open' in px, 'partial execution states the executed quantity')
+check(3, 'Partial: 1 closed, 1 still held' in px and px.startswith('Model reduced a simulated position'),
+      'partial execution states the executed quantity')
 
 print('── §11 diagnostics ──')
 bars = [{'end': T0 + i * 60, 'volume': v, 'close': c} for i, (v, c) in enumerate([(0, 1.0), (10, 1.2), (30, 1.1), (60, 1.4)])]
@@ -548,6 +566,20 @@ try:
 except RuntimeError:
     ok = True
 check(38, ok, 'an incompatible journal schema is refused, never silently reused')
+
+print('── decision-time semantics (QUOTE_FUTURE_DATED, 2026-10-19) ──')
+from campaign_flow import contracts as cfc
+from campaign_flow.model import contract as _mk
+_t = cal.bounds(date(2026, 10, 19))[0] + 3600
+_ch = lambda qts: {'contract': _mk('TSLA', 'C', 450.0, '2026-10-23'),
+                   'quote': {'bid': 2.0, 'ask': 2.1, 'ask_size': 5, 'bid_size': 5, 'ts': qts}}
+_r = lambda qts, now: cfc.check(_ch(qts), 'BULLISH', 'INTRADAY', _t + 3600, now)
+check(39, 'QUOTE_FUTURE_DATED' in _r(_t + 10.2, _t),
+      'cycle-start stamp: a quote received 10 s into the cycle reads as future-dated (the live bug)')
+check(40, _r(_t + 10.2, _t + 10.6) == [], 'receipt-time stamp: the same quote is current and eligible')
+check(41, 'QUOTE_FUTURE_DATED' in _r(_t + 11.0, _t + 10.6),
+      'a quote leading the receipt time by more than the clock tolerance is STILL rejected')
+check(42, 'QUOTE_STALE' in _r(_t - 40, _t), 'stale quotes are still rejected')
 
 print()
 print(f"{len(FAILS)} failure(s)" if FAILS else "ALL CAMPAIGN-FLOW CHECKS PASSED")

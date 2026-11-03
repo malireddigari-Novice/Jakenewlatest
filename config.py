@@ -140,6 +140,11 @@ MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '1'))
 
 # ── Notifications (optional) ─────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL', '')
+# Display name every main-webhook post goes out under (Discord's per-message `username` override).
+DISCORD_USERNAME    = os.getenv('DISCORD_USERNAME', 'Mag 7 Algo')
+# Legacy attention-engine cards (ENTER/EXIT/SCALE/FLIP, coverage notices, "strengthening" lines). Members see
+# only the campaign-flow cards, so these stay in the log unless explicitly re-enabled (Mag 7 brief, item 2).
+LEGACY_DISCORD_ENABLED = os.getenv('LEGACY_DISCORD_ENABLED', 'false').lower() == 'true'
 # Durable delivery outbox (notify.py): PENDING → SENT only after Discord returns a message id.
 NOTIFY_OUTBOX_DB      = os.getenv('NOTIFY_OUTBOX_DB', 'jakenew_outbox.db')
 NOTIFY_TIMEOUT_S      = float(os.getenv('NOTIFY_TIMEOUT_S', '10'))
@@ -749,6 +754,14 @@ SHEET_NAMES = {
     'trades': os.getenv('SHEET_NAME_TRADES', 'Jakenew_Trades'),
 }
 
+# Mag 7 Algo alerts sheet (campaign_flow/alerts_sheet.py): every campaign-flow card published to Discord, one
+# row per card, in its OWN spreadsheet (not the Trading Log). Same service account; share the sheet with its
+# email as Editor. Rows are synced from the journal, so nothing is lost while Google is down.
+ALERTS_SHEET_ENABLED  = os.getenv('ALERTS_SHEET_ENABLED', 'false').lower() == 'true'
+ALERTS_SPREADSHEET_ID = os.getenv('ALERTS_SPREADSHEET_ID', '')
+ALERTS_SHEET_TAB      = os.getenv('ALERTS_SHEET_TAB', 'Alerts')
+ALERTS_SHEET_FROM     = os.getenv('ALERTS_SHEET_FROM', '2026-11-03')     # first session written (NY date)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # FOLLOW-UP P1 — CAMPAIGN CONFIDENCE / HOLD SCORE  (follow-up spec §4-7, §15-16, §20)
 # Separate HOLDING from ENTERING. A stateful CampaignConfidence persists across polls: rotation is a
@@ -839,7 +852,10 @@ REINFORCE_MIN_CONF        = float(os.getenv('REINFORCE_MIN_CONF', '0.55'))  # do
 # incident; after data resumes it stays DEGRADED for COVERAGE_RECOVERY_S (fresh windows span the gap and
 # would read as a fake shock) and takes no new entry. Exits/management still run.
 COVERAGE_GATE_ENABLED     = os.getenv('COVERAGE_GATE_ENABLED', 'true').lower() == 'true'
-COVERAGE_GAP_S            = float(os.getenv('COVERAGE_GAP_S', '30'))       # live cadence is 5s
+# Measured live cycle (2026-10-19, 7019 per-ticker intervals): median 17 s, p90 38 s, p99 44 s — the loop
+# sleeps 5 s but fetches the Mag-7 sequentially. At 30 s a third of normal cycles read as outages (2352
+# incidents in one session, legacy entries permanently DEGRADED). A missed cycle is always an incident.
+COVERAGE_GAP_S            = float(os.getenv('COVERAGE_GAP_S', '60'))
 COVERAGE_RECOVERY_S       = float(os.getenv('COVERAGE_RECOVERY_S', '180')) # = WINDOW_SLOW (3 mid windows)
 COVERAGE_NOTIFY_MIN_GAP_S = float(os.getenv('COVERAGE_NOTIFY_MIN_GAP_S', '60'))  # Discord notice for gaps ≥ this (0 = off)
 # Flow handoff §4: an abnormality z needs history behind it. Below this many samples the per-ticker
@@ -1220,7 +1236,7 @@ SNAPSHOT_MAX_SKEW_MS     = float(os.getenv('SNAPSHOT_MAX_SKEW_MS', '3000'))
 # candidate in [NEAR_MISS_MIN_SCORE, ENTRY_ROUTE_MIN_SCORE) that has qualified control, low
 # distribution and a non-EXTENDED/MATURE ValueState produces a Discord 🟡 alert so we can SEE what
 # Jakenew sees again and collect live evidence on whether 0.50-0.54 candidates are worth trading.
-NEAR_MISS_ALERT_ENABLED = os.getenv('NEAR_MISS_ALERT_ENABLED', 'true').lower() == 'true'
+NEAR_MISS_ALERT_ENABLED = os.getenv('NEAR_MISS_ALERT_ENABLED', 'false').lower() == 'true'
 NEAR_MISS_MIN_SCORE     = float(os.getenv('NEAR_MISS_MIN_SCORE', '0.45'))
 NEAR_MISS_ROUTES        = [r.strip() for r in os.getenv(
     'NEAR_MISS_ROUTES', 'CROSS_STRIKE,PERSISTENT_BUILD,SHAKEOUT_RECOVERY,FAST_SHOCK,STAIR_STEP').split(',') if r.strip()]
@@ -1231,6 +1247,8 @@ NEAR_MISS_REALERT_DELTA  = float(os.getenv('NEAR_MISS_REALERT_DELTA', '0.05'))  
 # EOD attrition report — the entry funnel + hard-veto breakdown + near-miss buckets, so we can see
 # exactly where candidates are lost (the audit's ACTIVE_EVENT → QUALIFIED_CAMPAIGN → ENTRY_READY view).
 ATTRITION_REPORT_ENABLED = os.getenv('ATTRITION_REPORT_ENABLED', 'true').lower() == 'true'
+# EOD funnel cards (campaign-flow EOD + legacy attrition) to Discord. Off: the same numbers stay in the log.
+EOD_DISCORD_ENABLED = os.getenv('EOD_DISCORD_ENABLED', 'false').lower() == 'true'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HANDOFF P4 — COOLING / REACCELERATION / RE-ENTRY-AFTER-COOLING

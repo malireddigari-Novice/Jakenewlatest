@@ -9,6 +9,10 @@ from datetime import datetime
 import pytz
 
 os.environ['CF_MODE'] = 'SHADOW'
+# Base-spec pipeline; the Mag 7 brief additions are pinned off here and covered by test_mag7_brief.py.
+for _k, _v in (('CF_CONV_ENABLED', 'false'), ('CF_MAX_ENTRIES_PER_RIGHT_DAY', '0'),
+               ('CF_TRAIL_ARM_GAIN', '0'), ('CF_OVERNIGHT_ENABLED', 'false')):
+    os.environ.setdefault(_k, _v)
 from campaign_flow import settings as S
 from campaign_flow.executor import SimBroker
 from campaign_flow.journal import Journal
