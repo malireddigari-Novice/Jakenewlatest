@@ -172,45 +172,63 @@ class AlpacaDataClient:
             page = j.get('next_page_token')
             if not page:
                 break
+        return _parse_snapshots(snaps)
 
-        parsed: dict = {}
-        for occ, s in snaps.items():
-            p = _parse_occ(occ)
-            if not p:
-                continue
-            _sym, strike, ot = p
-            q  = s.get('latestQuote') or {}
-            db = s.get('dailyBar') or {}
-            tr = s.get('latestTrade') or {}
-            g  = s.get('greeks') or {}
-            bid, ask = q.get('bp'), q.get('ap')
-            mark = ((float(bid) + float(ask)) / 2) if (bid and ask) else (
-                float(tr['p']) if tr.get('p') else None)
-            raw_iv = s.get('impliedVolatility')
-            parsed[(strike, ot)] = {
-                'bid':          float(bid) if bid else None,
-                'ask':          float(ask) if ask else None,
-                'mark':         mark,
-                'bid_size':     int(q.get('bs', 0) or 0),   # book depth (contracts) — liquidity gate
-                'ask_size':     int(q.get('as', 0) or 0),
-                'quote_ts':     q.get('t'),                 # ISO ts of the quote — staleness gate
-                'volume':       int(db.get('v', 0) or 0),   # cumulative day volume
-                'day_high':     float(db['h']) if db.get('h') else None,
-                'day_low':      float(db['l']) if db.get('l') else None,
-                'delta':        g.get('delta'),
-                'gamma':        g.get('gamma'),
-                'implied_vol':  float(raw_iv) if raw_iv is not None else None,
-                # newest print + prior-session volume (campaign-flow window adapter)
-                'trade_px':     float(tr['p']) if tr.get('p') else None,
-                'trade_ts':     tr.get('t'),
-                'trade_size':   int(tr.get('s') or 0) if tr else None,
-                'trade_cond':   tr.get('c'),
-                'prev_volume':  int((s.get('prevDailyBar') or {}).get('v') or 0),
-            }
-        return parsed
+    def get_option_contract_snapshots(self, symbol: str, expiry, strikes) -> dict:
+        """Snapshots for specific strikes of one expiration, whatever the spot (contracts a strategy HOLDS that
+        have drifted out of the polled band still need live quotes to be managed). Same shape as
+        get_option_snapshots; both rights are returned for each strike."""
+        exp = expiry.isoformat() if hasattr(expiry, 'isoformat') else str(expiry)
+        snaps: dict = {}
+        for k in sorted({float(x) for x in strikes}):
+            j = self._get(_DATA, f"/v1beta1/options/snapshots/{symbol}",
+                          {'feed': _OPT_FEED, 'limit': 10, 'expiration_date': exp,
+                           'strike_price_gte': k, 'strike_price_lte': k})
+            if j:
+                snaps.update(j.get('snapshots') or {})
+        return _parse_snapshots(snaps)
 
 
 # ── module helper ─────────────────────────────────────────────────────────────
+
+def _parse_snapshots(snaps: dict) -> dict:
+    """Raw Alpaca option snapshots {occ: snapshot} -> {(strike, 'CALL'|'PUT'): parsed quote/trade/bar}."""
+    parsed: dict = {}
+    for occ, s in snaps.items():
+        p = _parse_occ(occ)
+        if not p:
+            continue
+        _sym, strike, ot = p
+        q  = s.get('latestQuote') or {}
+        db = s.get('dailyBar') or {}
+        tr = s.get('latestTrade') or {}
+        g  = s.get('greeks') or {}
+        bid, ask = q.get('bp'), q.get('ap')
+        mark = ((float(bid) + float(ask)) / 2) if (bid and ask) else (
+            float(tr['p']) if tr.get('p') else None)
+        raw_iv = s.get('impliedVolatility')
+        parsed[(strike, ot)] = {
+            'bid':          float(bid) if bid else None,
+            'ask':          float(ask) if ask else None,
+            'mark':         mark,
+            'bid_size':     int(q.get('bs', 0) or 0),   # book depth (contracts) — liquidity gate
+            'ask_size':     int(q.get('as', 0) or 0),
+            'quote_ts':     q.get('t'),                 # ISO ts of the quote — staleness gate
+            'volume':       int(db.get('v', 0) or 0),   # cumulative day volume
+            'day_high':     float(db['h']) if db.get('h') else None,
+            'day_low':      float(db['l']) if db.get('l') else None,
+            'delta':        g.get('delta'),
+            'gamma':        g.get('gamma'),
+            'implied_vol':  float(raw_iv) if raw_iv is not None else None,
+            # newest print + prior-session volume (campaign-flow window adapter)
+            'trade_px':     float(tr['p']) if tr.get('p') else None,
+            'trade_ts':     tr.get('t'),
+            'trade_size':   int(tr.get('s') or 0) if tr else None,
+            'trade_cond':   tr.get('c'),
+            'prev_volume':  int((s.get('prevDailyBar') or {}).get('v') or 0),
+        }
+    return parsed
+
 
 def _parse_occ(occ: str) -> Optional[tuple[str, float, str]]:
     """OCC ticker → (underlying, strike, 'CALL'|'PUT'). None if malformed."""

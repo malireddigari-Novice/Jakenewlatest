@@ -172,6 +172,11 @@ class Pipeline:
         fresh, n, future, lead = 0, 0, 0, None
         for occ, c in ob['contracts'].items():
             con = mkcontract(t, c['right'], c['strike'], c['expiry'], c.get('adj', ''), c.get('multiplier', 100))
+            if c.get('held_only'):                      # a held contract outside the band: quote for management only
+                self._quotes[occ] = {'bid': c.get('bid'), 'ask': c.get('ask'), 'bid_size': c.get('bid_size'),
+                                     'ask_size': c.get('ask_size'), 'ts': c.get('quote_ts'), 'feed': ob.get('feed'),
+                                     'contract': con, 'day_volume': c.get('cum_volume'), 'held_only': True}
+                continue
             key = series_key(con)
             self._contract[key] = con
             smp = {'ts': ts, 'slot': slot, 'cum': c.get('cum_volume'), 'bid': c.get('bid'), 'ask': c.get('ask'),
@@ -214,7 +219,8 @@ class Pipeline:
         rights, complete = {}, bool(exps)
         have = defaultdict(lambda: {'C': set(), 'P': set()})
         for c in ob['contracts'].values():
-            have[str(c['expiry'])][c['right']].add(float(c['strike']))
+            if not c.get('held_only'):
+                have[str(c['expiry'])][c['right']].add(float(c['strike']))
         for e in exps:
             rights[e] = sorted(r for r in ('C', 'P') if have[e][r])
             lst = self._listing.get((t, e))
@@ -392,6 +398,8 @@ class Pipeline:
         out = []
         for occ, q in self._quotes.items():
             c = q['contract']
+            if q.get('held_only'):
+                continue
             if c['ticker'] == t and c['right'] == right and (str(c['expiry']), float(c['strike'])) in keys:
                 out.append({'contract': c, 'quote': {k: q[k] for k in ('bid', 'ask', 'bid_size', 'ask_size', 'ts', 'feed')},
                             'day_volume': q.get('day_volume'), 'oi': None, 'utility': None})

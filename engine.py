@@ -16,6 +16,7 @@ The goal is 0-3 waves and ≤5 primary entries per session — not a trade every
 minute. Execution is real only when config.LEGACY_ORDERS_ENABLED; otherwise SHADOW accounting.
 """
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -113,6 +114,7 @@ class AttentionEngine:
         # default; with CF_MODE=PAPER it owns the paper orders and this engine stops ordering.
         self.cf = None
         self._raw_snaps: dict = {}         # sym -> (spot, expiry, unfiltered snapshots) for this poll
+        self._raw_held: dict = {}          # sym -> {(expiry ISO, strike, side): quote} held contracts outside the band
         self._raw_next: dict = {}          # sym -> (next expiry, snapshots) when the nearest expires today (CF carry)
         self._timing: dict = {}            # sym -> {poll_start_ts, fetch_start_ts, recv_ts, server_ts} this poll
         self._cycle_incidents: list = []   # coverage incidents closed during the current ingest cycle
@@ -145,13 +147,17 @@ class AttentionEngine:
         """(code_version, config_hash) for the Decision Ledger — so a record is tied to exactly what
         was executing. code_version from .git/HEAD (best-effort); config_hash over behavior flags."""
         import hashlib
-        cv = None
+        cv = os.getenv('CODE_VERSION') or None        # set in the container image (git sha at build)
         try:
+            if cv:
+                raise StopIteration
             head = open('.git/HEAD').read().strip()
             if head.startswith('ref:'):
                 cv = open('.git/' + head.split(' ', 1)[1]).read().strip()[:12]
             else:
                 cv = head[:12]
+        except StopIteration:
+            pass
         except Exception:
             cv = None
         try:
@@ -555,9 +561,11 @@ class AttentionEngine:
         self._last_cand = cand
         state.save(self.state)
 
-    def _fetch_one(self, sym: str):
+    def _fetch_one(self, sym: str, held=None):
         """Network half of one ticker's ingest (runs on a worker thread; touches no engine state).
-        Returns (spot, expiry, snaps, timing) or None. recv_ts = when ALL of this ticker's responses had
+        `held` = campaign-flow's held contracts [(expiry ISO, strike, side)], read on the main thread; any of them
+        outside this poll's spot band is fetched by strike so the position always has a live quote.
+        Returns (spot, expiry, snaps, timing, next, held_quotes) or None. recv_ts = when ALL of this ticker's responses had
         arrived — the time campaign-flow decides at and feed coverage measures."""
         fetch_start = time.time()
         spot = self.data.get_spot(sym)
@@ -574,8 +582,33 @@ class AttentionEngine:
             e2 = next((e for e in self.data.get_scan_expiries(sym, 2) if e > expiry), None)
             s2 = self.data.get_option_snapshots(sym, e2, spot, config.PREMIUM_BAND_PCT) if e2 else None
             nxt = (e2, s2) if s2 else None
+        hq = self._fetch_held(sym, held, expiry, snaps, nxt)
         return spot, expiry, snaps, {'fetch_start_ts': fetch_start, 'recv_ts': time.time(),
-                                     'server_ts': getattr(self.data, 'last_server_ts', None)}, nxt
+                                     'server_ts': getattr(self.data, 'last_server_ts', None)}, nxt, hq
+
+    def _fetch_held(self, sym, held, expiry, snaps, nxt) -> dict:
+        """Quotes for held contracts this poll did not cover (the stock moved away from the strike). Without
+        them campaign-flow cannot price the position, so no exit (stop, trail, 15:30 deadline) can fire — the
+        2026-11-05 TSLA 365C was left open overnight that way. Worker thread; network only."""
+        polled = {str(expiry): snaps or {}}
+        if nxt:
+            polled[str(nxt[0])] = nxt[1] or {}
+        need = {}
+        for exp, strike, side in held or []:
+            if (float(strike), side) not in polled.get(exp, {}):
+                need.setdefault(exp, set()).add(float(strike))
+        out = {}
+        for exp, strikes in need.items():
+            try:
+                got = self.data.get_option_contract_snapshots(sym, exp, strikes)
+            except Exception:
+                logger.warning("%s: held-contract quote fetch failed (%s %s)", sym, exp, sorted(strikes),
+                               exc_info=True)
+                continue
+            for (strike, side), q in got.items():
+                if (exp, float(strike), side) in set(held):
+                    out[(exp, float(strike), side)] = q
+        return out
 
     def _ingest_all(self, now: datetime) -> list:
         """One poll cycle. The Mag-7 are FETCHED IN PARALLEL (one worker per ticker; a sequential loop made
@@ -585,14 +618,21 @@ class AttentionEngine:
         measured, failed = [], []
         poll_start = now.timestamp()
         self._timing = {}
-        futs = {sym: self._pool.submit(self._fetch_one, sym) for sym in config.MAG7}
+        held = {}
+        if self.cf:
+            for sym in config.MAG7:
+                try:
+                    held[sym] = self.cf.held_contracts(sym)
+                except Exception:
+                    logger.warning("%s: campaign-flow held-contract lookup failed", sym, exc_info=True)
+        futs = {sym: self._pool.submit(self._fetch_one, sym, held.get(sym)) for sym in config.MAG7}
         for sym in config.MAG7:
             try:
                 got = futs[sym].result()
                 if got is None:
                     failed.append(sym)
                     continue
-                spot, expiry, snaps, tm, nxt = got
+                spot, expiry, snaps, tm, nxt, hq = got
                 recv = tm['recv_ts']
                 self._timing[sym] = {'poll_start_ts': poll_start, **tm}
                 self._raw_snaps[sym] = (spot, expiry, snaps)
@@ -600,6 +640,7 @@ class AttentionEngine:
                     self._raw_next[sym] = nxt
                 else:
                     self._raw_next.pop(sym, None)
+                self._raw_held[sym] = hq
                 # Addendum #11-12: validate the OPRA stream before it feeds event detection — drop
                 # crossed/negative/no-mark snapshots so a bad quote can't fabricate an "event".
                 if config.DATA_QUALITY_ENABLED:
@@ -651,7 +692,8 @@ class AttentionEngine:
                 pass
             try:
                 self.cf.on_poll(now, sym, spot, expiry, snaps, legacy, timing=self._timing.get(sym),
-                                extra=[self._raw_next[sym]] if sym in self._raw_next else None)
+                                extra=[self._raw_next[sym]] if sym in self._raw_next else None,
+                                held=self._raw_held.get(sym))
             except Exception:
                 logger.warning("campaign-flow poll failed for %s", sym, exc_info=True)
 

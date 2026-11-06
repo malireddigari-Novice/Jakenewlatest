@@ -49,6 +49,20 @@ def _epoch(iso):
     return datetime.fromisoformat(s).timestamp()
 
 
+def add_held(t: str, held, contracts: dict) -> None:
+    """Merge quotes for held contracts outside the polled band into a poll's contracts, marked held_only (the
+    pipeline uses them to manage the position, never as flow). A contract already in the poll is left alone."""
+    for (exp, strike, side), q in (held or {}).items():
+        right = 'C' if side == 'CALL' else 'P'
+        con = mkcontract(t, right, strike, exp)
+        if con['occ'] in contracts:
+            continue
+        contracts[con['occ']] = {
+            'right': right, 'strike': float(strike), 'expiry': exp, 'bid': q.get('bid'), 'ask': q.get('ask'),
+            'bid_size': q.get('bid_size'), 'ask_size': q.get('ask_size'), 'quote_ts': _epoch(q.get('quote_ts')),
+            'cum_volume': q.get('volume'), 'held_only': True}
+
+
 class Runner:
 
     def __init__(self, data_client, exec_client=None, journal_path=None, obs_dir=None) -> None:
@@ -291,12 +305,25 @@ class Runner:
         """Observe the next expiration too when the nearest one expires today (overnight carry)."""
         return S.OVERNIGHT_ENABLED and expiry == cal.ny_day(time.time())
 
+    def held_contracts(self, t: str) -> list:
+        """Contracts of `t` this policy holds (or is still buying), as [(expiry ISO, strike, 'CALL'|'PUT')].
+        The engine fetches any of them that fall outside its spot band, so management always sees a live quote.
+        Call on the thread that owns the journal (the engine main loop)."""
+        out = []
+        for c in self.j.campaigns(('ACTIVE', 'ENTRY_PENDING', 'PROPOSED')):
+            if c['ticker'] == t and (c.get('held_qty') or c.get('outstanding_entry_qty')):
+                k = c['contract']
+                out.append((str(k['expiry']), float(k['strike']), 'CALL' if k['right'] == 'C' else 'PUT'))
+        return sorted(set(out))
+
     def on_poll(self, now: datetime, t: str, spot: float, expiry, snaps: dict, legacy: dict = None,
-                timing: dict = None, extra=None) -> None:
+                timing: dict = None, extra=None, held=None) -> None:
         """`timing` = the engine's per-ticker {poll_start_ts, fetch_start_ts, recv_ts, server_ts}. The observation
         (and every decision on it) is stamped at recv_ts — when ALL of this ticker's data had arrived. Without
         timing (an old caller) the cycle start is used and the poll is marked UNRECORDED. `extra` = [(expiry, snaps)] for further
-        observed expirations (the next one, for overnight carry); they join the same poll observation."""
+        observed expirations (the next one, for overnight carry); they join the same poll observation.
+        `held` = {(expiry ISO, strike, 'CALL'|'PUT'): quote} for held contracts outside the polled band; they are
+        recorded with held_only=True and used only to manage the position (never as flow)."""
         ts = float(timing['recv_ts']) if timing and timing.get('recv_ts') else now.timestamp()
         self.polls += 1
         tm = {**(timing or {'poll_start_ts': now.timestamp()}),
@@ -326,6 +353,7 @@ class Runner:
                 if self._listing_sig.get((t, exp)) != sig:
                     self._listing_sig[(t, exp)] = sig
                     self.emit({'kind': 'listing', 'ts': ts, 'ticker': t, 'expiry': exp, **lst, 'band': list(band)})
+        add_held(t, held, contracts)
         try:
             self._prior_bars(keys, ts, d)
         except Exception:
