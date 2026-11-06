@@ -1725,6 +1725,15 @@ documented default until the owner answers the brief's open questions.
 3. **No "awaiting fill" cards.** Only ENTRY_FILLED / EXIT_FILLED are published (`CF_PUBLISH_PROPOSED=false`).
    Proposals are journaled with `published=0`; a proposal that never fills posts nothing. The card shows the
    fill price, not the indicative quote.
+   **Partial fills are never published (2026-11-04, user request: members see only Opened and Closed).**
+   Every partial fill is still journaled as its own card, with `published=0` and `sheet.partial=true`.
+   Members get one combined card per position instead (`Pipeline._sync_orders` / `_publish_open`):
+   - **Opened** is posted once the entry order is complete: total contracts at the weighted average entry.
+     If the unfilled remainder is cancelled, it is posted then, for the contracts actually bought.
+   - **Closed** is posted only when the position is flat: total contracts at the weighted average exit.
+     If an entry is still filling when the position goes flat, its Opened card is posted first.
+   - A whole-order fill posts exactly as before: same card ids, one card per fill.
+   - No "Reduced" card is ever posted.
 4. **One call and one put entry per day** (`CF_MAX_ENTRIES_PER_RIGHT_DAY=1`, `CF_ENTRY_CAP_SCOPE=ALL`,
    reason `DAILY_CALL_PUT_ENTRY_CAP`). **[owner: across all names or per ticker]** Rules:
    - Every proposal that reserves or reached a fill counts. One cancelled unfilled frees its slot.
@@ -1762,7 +1771,8 @@ documented default until the owner answers the brief's open questions.
      (`TRAILING_STOP_FROM_PEAK`). That was calibrated on the 10-30 395C bid path, which dipped 4.35 -> 3.15
      before running to 8.55. A 50%/40% trail sold it at 10:03 for +51%.
 7. **Wording.** Member cards changed as follows:
-   - Titles are "Model opened / closed / reduced a simulated position".
+   - Titles are "Model opened / closed a simulated position". The "reduced" title is only on journaled partial
+     cards, never posted (see 3).
    - "Simulated fill" replaces "Actual fill".
    - "Planned contracts" and "Exit plan" are removed.
    - Campaign ids are hidden (`CF_CARD_SHOW_CAMPAIGN_ID`).
@@ -1799,7 +1809,7 @@ that account's email as Editor.
 
 **Columns:**
 - Date and time (ET), ticker.
-- Alert: Opened, Reduced or Closed.
+- Alert: Opened or Closed. The sheet mirrors what was posted, so partial fills never appear (see 3 above).
 - Contract, side, expiry and horizon.
 - Simulated fill, contracts, contracts still held, and average entry.
 - Exit rows only: simulated return and P&L, written as sheet formulas.
@@ -1817,3 +1827,8 @@ Return, P&L and conviction stay off member cards (brief item 7). The sheet is an
 - A Google outage or a restart therefore never loses or duplicates a row.
 - To run a sync by hand: `python -m campaign_flow.alerts_sheet`.
 - Covered by `test_alerts_sheet.py`.
+
+**Legacy Trading Log off (2026-11-02):** the live `.env` now sets `SHEETS_ENABLED=false`. The legacy engine is
+compute-only, so its SHADOW trades no longer go to the shared "Trading Log" (`Jakenew_Trades` tab). The rows
+already there stay. Members' alerts are only in the Mag 7 Algo alerts sheet above. Set `SHEETS_ENABLED=true`
+again if the legacy engine ever owns trading.

@@ -529,22 +529,54 @@ class Pipeline:
             if f['kind'] == 'ENTRY':
                 r = self.router.entry_fill(f)
                 if r.get('accepted') and not r.get('duplicate'):
+                    c2 = self.j.campaign(f['campaign_id'])
+                    whole = c2['outstanding_entry_qty'] == 0 and int(f['qty']) == c2['entry_filled_qty']
+                    # Partial fills are journaled but never published: members see one Opened card per position
                     self._card('ENTRY_FILLED', c['campaign_id'], f['ts'], price=f['price'], qty=f['qty'],
-                               card_id=f"{f['event_id']}:EF", source=f.get('source'))
+                               card_id=f"{f['event_id']}:EF", source=f.get('source'), suppress=not whole)
+                    if not whole and c2['outstanding_entry_qty'] == 0:
+                        self._publish_open(c['campaign_id'], f['ts'], f.get('source'))
             elif f['kind'] == 'EXIT':
                 r = self.router.exit_fill(f)
                 if r.get('accepted') and not r.get('duplicate'):
                     c2 = self.j.campaign(f['campaign_id'])
+                    flat = c2['held_qty'] == 0
+                    whole = flat and int(f['qty']) == c2['exit_filled_qty']
+                    reasons = (c2.get('exit_pending') or {}).get('reasons')
+                    if flat:                                   # an entry still mid-fill gets its Opened card first
+                        self._publish_open(c['campaign_id'], f['ts'], f.get('source'))
                     self._card('EXIT_FILLED', c['campaign_id'], f['ts'], price=f['price'], qty=f['qty'],
-                               reasons=(c2.get('exit_pending') or {}).get('reasons'), avg=c2['avg_entry'],
+                               reasons=reasons, avg=c2['avg_entry'],
                                remaining=c2['held_qty'] or None, card_id=f"{f['event_id']}:XF",
-                               source=f.get('source'))
+                               source=f.get('source'), suppress=not whole)
+                    if flat and not whole:                     # one combined Closed card at the weighted exit
+                        xs = [x for x in self.j.fills(c['campaign_id']) if x['accepted'] and x['kind'] == 'EXIT']
+                        q = sum(int(x['qty']) for x in xs)
+                        px = sum(int(x['qty']) * float(x['price']) for x in xs) / q
+                        self._card('EXIT_FILLED', c['campaign_id'], f['ts'], price=round(px, 4), qty=q,
+                                   reasons=reasons, avg=c2['avg_entry'], card_id=f"{c['campaign_id']}:XF{q}",
+                                   source=f.get('source'))
             elif f['kind'] == 'CANCEL':
-                self.router.cancel_confirmed(f)
+                r = self.router.cancel_confirmed(f)
+                if r.get('applied'):                           # entry ended part-filled: publish what was bought
+                    src = next((x.get('source') for x in reversed(self.j.fills(f['campaign_id']))
+                                if x['accepted'] and x['kind'] == 'ENTRY'), None)
+                    self._publish_open(f['campaign_id'], f['ts'], src)
+
+    def _publish_open(self, cid, ts, source):
+        """One combined Opened card (total contracts at the weighted entry) when the only Opened cards on record
+        are partial fills held back from members."""
+        c = self.j.campaign(cid)
+        if not c or not c.get('entry_filled_qty') or not c.get('avg_entry'):
+            return
+        if any(k['label'] == 'ENTRY_FILLED' and not (k.get('sheet') or {}).get('partial') for k in self.j.cards(cid)):
+            return
+        self._card('ENTRY_FILLED', cid, ts, price=round(c['avg_entry'], 4), qty=c['entry_filled_qty'],
+                   card_id=f"{cid}:EF", source=source)
 
     # ── cards / marks ──────────────────────────────────────────────────────────
     def _card(self, label, cid, ts, *, price=None, qty=None, reasons=None, avg=None, remaining=None,
-              card_id, source=None):
+              card_id, source=None, suppress=False):
         c = self.j.campaign(cid)
         try:
             payload = cards.render(label, c, ts=ts, price=price, qty=qty, reasons=reasons, avg_entry=avg,
@@ -552,9 +584,11 @@ class Pipeline:
         except cards.CardError as exc:
             self.j.log(ts, 'CARD_REJECTED', {'label': label, 'error': str(exc)}, ticker=c['ticker'], ref=cid)
             return
-        public = (S.MODE == 'PAPER' and S.DISCORD_ENABLED and source != 'SIM' and self.publish is not None
+        public = (not suppress and S.MODE == 'PAPER' and S.DISCORD_ENABLED and source != 'SIM'
+                  and self.publish is not None
                   and (label.endswith('FILLED') or S.PUBLISH_PROPOSED))
-        sheet = {'price': price, 'qty': qty, 'remaining': remaining, 'avg': avg, 'reasons': reasons}
+        sheet = {'price': price, 'qty': qty, 'remaining': remaining, 'avg': avg, 'reasons': reasons,
+                 'partial': bool(suppress)}
         if self.j.put_card(card_id, cid, label, ts, {**payload, 'sheet': sheet}, published=public) and public:
             self.publish(payload, card_id)
 

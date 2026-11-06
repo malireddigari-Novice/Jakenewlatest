@@ -327,6 +327,75 @@ e = sent[0]['embeds'][0]
 check(e['title'] == 'Model opened a simulated position' and 'Campaign' not in e['description']
       and e['footer']['text'].startswith('Education only'), 'neutral title, no campaign id, "Education only" footer')
 
+print('── 3 partial fills are journaled, never published ──')
+from campaign_flow import executor  # noqa: E402
+real_sync = executor.sync
+
+
+def scripted():
+    """Fresh pipeline that records published card embeds; fills arrive via feed()."""
+    out = []
+    p = Pipeline(jr(), SimBroker(), publish=lambda payload, cid: out.append(payload['embeds'][0]))
+    return p, out
+
+
+def feed(p, ts, *evs):
+    executor.sync = lambda pipe, t: list(evs)
+    S.MODE, S.DISCORD_ENABLED = 'PAPER', True
+    try:
+        p._sync_orders(ts)
+    finally:
+        executor.sync = real_sync
+        S.MODE, S.DISCORD_ENABLED = 'SHADOW', False
+
+
+def fill(eid, cid, kind, qty, price, ts):
+    return {'event_id': eid, 'campaign_id': cid, 'kind': kind, 'qty': qty, 'price': price, 'ts': ts,
+            'source': 'ALPACA_PAPER'}
+
+
+# A: entry fills 1 + rest, exit fills 1 + rest → exactly one Opened and one Closed card, both combined
+P, out = scripted()
+r = P.router.propose(cand('pf1', T0 + 300))
+cid = r['campaign_id']
+n = P.j.campaign(cid)['outstanding_entry_qty']
+check(n >= 2, f'scenario needs a multi-contract entry (planned {n})')
+feed(P, T0 + 305, fill('pe1', cid, 'ENTRY', 1, 2.00, T0 + 305))
+check(out == [], 'first partial entry fill: no member card')
+feed(P, T0 + 310, fill('pe2', cid, 'ENTRY', n - 1, 2.20, T0 + 310))
+avg = (2.00 + 2.20 * (n - 1)) / n
+check(len(out) == 1 and out[0]['title'] == 'Model opened a simulated position'
+      and f'Contracts {n}' in out[0]['description'] and f'${avg:.2f}' in out[0]['description'],
+      f'entry complete: one Opened card for all {n} contracts at the weighted ${avg:.2f}')
+feed(P, T0 + 400, fill('px1', cid, 'EXIT', 1, 3.00, T0 + 400))
+check(len(out) == 1, 'first partial exit fill: no "Reduced" card')
+feed(P, T0 + 410, fill('px2', cid, 'EXIT', n - 1, 2.00, T0 + 410))
+xavg = (3.00 + 2.00 * (n - 1)) / n
+check(len(out) == 2 and out[1]['title'] == 'Model closed a simulated position'
+      and f'Contracts {n}' in out[1]['description'] and f'${xavg:.2f}' in out[1]['description']
+      and 'Partial' not in out[1]['description'],
+      f'position flat: one Closed card for all {n} contracts at the weighted ${xavg:.2f}')
+cs = P.j.cards(cid)
+check(sum(c['published'] for c in cs) == 2 and len(cs) == 6,
+      'the four partial-fill cards stay in the journal unpublished (2 published of 6)')
+
+# B: entry part-fills, the remainder is cancelled → one Opened card for what was bought
+P, out = scripted()
+cid = P.router.propose(cand('pf2', T0 + 300))['campaign_id']
+feed(P, T0 + 305, fill('pe3', cid, 'ENTRY', 1, 2.05, T0 + 305))
+feed(P, T0 + 320, {'event_id': 'pe3:cancel', 'campaign_id': cid, 'kind': 'CANCEL', 'ts': T0 + 320})
+check(len(out) == 1 and 'Contracts 1' in out[0]['description'] and '$2.05' in out[0]['description'],
+      'entry remainder cancelled: one Opened card for the 1 contract actually bought')
+
+# C: whole-order fills publish exactly as before
+P, out = scripted()
+cid = P.router.propose(cand('pf3', T0 + 300))['campaign_id']
+n = P.j.campaign(cid)['outstanding_entry_qty']
+feed(P, T0 + 305, fill('pe4', cid, 'ENTRY', n, 2.10, T0 + 305))
+feed(P, T0 + 400, fill('px4', cid, 'EXIT', n, 2.60, T0 + 400))
+check([o['title'] for o in out] == ['Model opened a simulated position', 'Model closed a simulated position']
+      and all(c['published'] for c in P.j.cards(cid)), 'whole fills: one Opened and one Closed card, unchanged')
+
 print()
 if FAILS:
     print(f"{len(FAILS)} MAG 7 BRIEF CHECK(S) FAILED")
