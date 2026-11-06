@@ -10,7 +10,9 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# DOTENV_PATH lets a container point at a .env materialized outside the code dir (AWS: written from Secrets
+# Manager at start-up). Unset → the usual search next to this file. Never overrides variables already set.
+load_dotenv(os.getenv('DOTENV_PATH') or None)
 
 # ── The universe ─────────────────────────────────────────────────────────────
 # Only the Mag-7 compete for the finite pool of institutional attention.

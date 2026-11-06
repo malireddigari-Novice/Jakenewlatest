@@ -1590,6 +1590,16 @@ available. The pipeline only reads those observations, so a replay reproduces th
        position must have been held >= 15 min.
 - §13/§14 **Orders and lifecycle:**
   - An exit intent persists through unusable quotes (`EXIT_PENDING_EXECUTABLE_QUOTE`) and partial fills.
+  - **Held contracts are always quoted (2026-11-05 fix).** The engine polls only strikes inside its spot band
+    (`PREMIUM_BAND_PCT`). Before each cycle it asks `Runner.held_contracts(t)` for every ACTIVE / ENTRY_PENDING /
+    PROPOSED contract. `engine._fetch_held` fetches any that the band poll (or the next-expiration poll)
+    missed, by exact strike (`get_option_contract_snapshots`). `runner.add_held` adds them to the poll as
+    `held_only`. The pipeline uses a `held_only` quote **only** to manage the position: no windows, no
+    coverage, never an entry choice. A failed fetch is logged and skipped.
+    *Why:* on 2026-11-05 the TSLA 365C (bought 10:12 ET, TSLA ~349) left the band when TSLA fell into the
+    340s after 11:42. With no quote, no exit could fire. The 15:30 deadline exit sat in
+    `EXIT_PENDING_EXECUTABLE_QUOTE` until shutdown, and the INTRADAY position was carried overnight into its
+    expiry by accident. Tested in `test_held_quotes.py`.
   - States: PROPOSED -> ACTIVE -> ENTRY_PENDING / CLOSED / CANCELLED. Fills update the weighted average entry;
     an unfilled remainder is cancelled after 90 s.
   - An opposite entry waits until the source campaign is fully CLOSED, then becomes a new campaign that
@@ -1720,8 +1730,10 @@ documented default until the owner answers the brief's open questions.
    09:57 ET card matches its `[SHADOW] ENTER` log line. Every legacy post (entry/scale/exit/flip/coverage/
    near-miss/strengthening/legacy EOD) is now behind `LEGACY_DISCORD_ENABLED` (default **false**). Every
    main-webhook post goes out as **"Mag 7 Algo"** (`DISCORD_USERNAME`). Note: **Jakevolume's `.env` holds the
-   same webhook URL**, and its `Jakevolume_DailyRun` task is enabled. That is a second process holding the
-   credentials; rotating the webhook fixes both.
+   same webhook URL**. Its scheduled tasks (`Jakevolume_DailyRun`, `Jakevolume Daily`,
+   `Jakevolume_TuesdayMorning`) are disabled as of 2026-11-05, and Discord carried only new-format cards
+   2026-11-03..05. The URL is still in a second `.env`, though, so "one process holds the credentials" is met
+   only once the webhook is rotated and the new URL goes into Jakenew's `.env` alone.
 3. **No "awaiting fill" cards.** Only ENTRY_FILLED / EXIT_FILLED are published (`CF_PUBLISH_PROPOSED=false`).
    Proposals are journaled with `published=0`; a proposal that never fills posts nothing. The card shows the
    fill price, not the indicative quote.
@@ -1832,3 +1844,45 @@ Return, P&L and conviction stay off member cards (brief item 7). The sheet is an
 compute-only, so its SHADOW trades no longer go to the shared "Trading Log" (`Jakenew_Trades` tab). The rows
 already there stay. Members' alerts are only in the Mag 7 Algo alerts sheet above. Set `SHEETS_ENABLED=true`
 again if the legacy engine ever owns trading.
+
+## Running on AWS: MWAA + ECS Fargate (2026-11-05)
+
+The daily session can run in AWS instead of the Windows task `Jakenew_DailyRun`. **Only one of the two may be
+live**: both would trade the same Alpaca paper account and post to the same Discord webhook. The steps are in
+`deploy/aws/README.md`.
+
+**Schedule.**
+- The MWAA DAG `jakenew_daily_session` (`deploy/aws/dags/`) runs on cron `10 8 * * 1-5` in America/Chicago.
+  That is the same 08:10 CT weekday start, and DST is handled.
+- `catchup=False`, so a missed day is never replayed.
+- It launches the image as an ECS Fargate task (`EcsRunTaskOperator`, deferrable) and succeeds or fails on the
+  container's exit code.
+- `main.py` is unchanged: it exits after the close, and at once on a holiday.
+
+**Container (`deploy/aws/entrypoint.py`).**
+- The working dir is the EFS mount `/data`, so every relative state path in `config.py` persists between days:
+  - the journal and outbox
+  - `jakenew_state.json`
+  - the ledgers and `cf_obs`
+  - the Schwab token and `jakenew.log`
+- An EFS lock (exit 75) plus `reattach=True` keep an Airflow retry from running a second copy.
+- On the first run it copies the seed state uploaded by `seed_state.ps1` from S3, never overwriting.
+- Secrets come from Secrets Manager:
+  - `jakenew/dotenv` holds the full `.env` text. It is written outside EFS and loaded via `DOTENV_PATH`;
+    variables already set still win.
+  - `jakenew/google-sa` holds the Google key; `GOOGLE_SERVICE_ACCOUNT_FILE` is pointed at it.
+  - `jakenew/schwab-token` is optional and is installed once per new upload.
+- `entrypoint.py <script.py> [args]` runs a one-off tool against the same volume, without the lock:
+  `cf_report.py`, or `export_state.py` (EFS to S3, for rollback or local analysis).
+
+**Code changes for the container:**
+- `config.py` honours `DOTENV_PATH`.
+- `engine._provenance` takes `CODE_VERSION` (the git sha baked into the image) when `.git` is absent.
+- `gspread`, `google-auth` and `boto3` are in `deploy/aws/requirements-aws.txt`. The alerts sheet always
+  needed the first two, but they were never in `requirements.txt`.
+
+**Tests:**
+- `test_aws_entrypoint.py` covers secrets, seeding, the Schwab-token handling, the lock, the hand-off to
+  `main.py` and script mode.
+- The full suite passes on Python 3.13, the image's version.
+- `cfn-lint` passes on `deploy/aws/cloudformation/jakenew-ecs.yaml`.

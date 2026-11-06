@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Jakenew trading session on ECS Fargate, launched daily by an existing MWAA environment.
+  ECR repository, ECS cluster + task definition, EFS state volume (with AWS Backup), Secrets Manager
+  placeholders, a private seed bucket, IAM roles, and the policy the MWAA execution role needs to run the task.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the Fargate task and EFS (can be the MWAA VPC).
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in one AZ. Needs outbound internet (NAT, or public subnet with AssignPublicIp=ENABLED).
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in a second AZ (EFS mount target).
+  AssignPublicIp:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: DISABLED
+    Description: ENABLED only for public subnets without NAT (Alpaca, Discord, Google need outbound HTTPS).
+  MwaaExecutionRoleName:
+    Type: String
+    Description: Name (not ARN) of the existing MWAA environment's execution role; gets permission to run the task.
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Image tag the task runs. build_and_push.ps1 pushes both :latest and :<git sha>.
+  Cpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048']
+  Memory:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '3072', '4096', '8192']
+
+Resources:
+  # ── image ───────────────────────────────────────────────────────────────────
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: jakenew
+      ImageScanningConfiguration: {ScanOnPush: true}
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [{"rulePriority": 1, "description": "keep the last 20 images",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 20},
+            "action": {"type": "expire"}}]}
+
+  # ── secrets (placeholders; put_secrets.ps1 writes the real values, never this template) ─────────────────
+  DotenvSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: jakenew/dotenv
+      Description: Full text of Jakenew's .env (Alpaca keys, Discord webhook, all strategy flags).
+      SecretString: 'PLACEHOLDER=1'
+  GoogleSaSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: jakenew/google-sa
+      Description: Google service-account JSON for the Mag 7 alerts sheet.
+      SecretString: 'none'
+  SchwabTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: jakenew/schwab-token
+      Description: Optional Schwab token JSON from schwab_reauth.py ('none' = Schwab off).
+      SecretString: 'none'
+
+  # ── state ───────────────────────────────────────────────────────────────────
+  SeedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-seed
+            Status: Enabled
+            Prefix: seed/
+            ExpirationInDays: 30
+          - Id: expire-exports
+            Status: Enabled
+            Prefix: export/
+            ExpirationInDays: 30
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jakenew Fargate task (egress only)
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0}
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jakenew EFS (NFS from the task only)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 2049, ToPort: 2049, SourceSecurityGroupId: !Ref TaskSecurityGroup}
+
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      BackupPolicy: {Status: ENABLED}
+      FileSystemTags:
+        - {Key: Name, Value: jakenew-state}
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetA
+      SecurityGroups: [!Ref EfsSecurityGroup]
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetB
+      SecurityGroups: [!Ref EfsSecurityGroup]
+
+  AccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: {Uid: '1000', Gid: '1000'}
+      RootDirectory:
+        Path: /jakenew
+        CreationInfo: {OwnerUid: '1000', OwnerGid: '1000', Permissions: '0750'}
+
+  # ── run ─────────────────────────────────────────────────────────────────────
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: jakenew
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/jakenew
+      RetentionInDays: 90
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: sts:AssumeRole}
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-jakenew-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref DotenvSecret, !Ref GoogleSaSecret, !Ref SchwabTokenSecret]
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: sts:AssumeRole}
+      Policies:
+        - PolicyName: jakenew-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !GetAtt SeedBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub '${SeedBucket.Arn}/*'
+              - Effect: Allow
+                Action: [s3:PutObject]
+                Resource: !Sub '${SeedBucket.Arn}/export/*'
+              - Effect: Allow
+                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
+                Resource: !GetAtt FileSystem.Arn
+                Condition:
+                  StringEquals:
+                    elasticfilesystem:AccessPointArn: !GetAtt AccessPoint.Arn
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: [MountTargetA, MountTargetB]
+    Properties:
+      Family: jakenew
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: state
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref AccessPoint
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: jakenew
+          Image: !Sub '${Repository.RepositoryUri}:${ImageTag}'
+          Essential: true
+          StopTimeout: 60
+          MountPoints:
+            - {SourceVolume: state, ContainerPath: /data}
+          Environment:
+            - {Name: DATA_DIR, Value: /data}
+            - {Name: SEED_S3_URI, Value: !Sub 's3://${SeedBucket}/seed/'}
+          Secrets:
+            - {Name: JAKENEW_DOTENV, ValueFrom: !Ref DotenvSecret}
+            - {Name: GOOGLE_SA_JSON, ValueFrom: !Ref GoogleSaSecret}
+            - {Name: SCHWAB_TOKEN_JSON, ValueFrom: !Ref SchwabTokenSecret}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ── MWAA may run, watch and stop this task, and read its logs ───────────────
+  MwaaRunTaskPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: jakenew-run-ecs-task
+      Roles: [!Ref MwaaExecutionRoleName]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ecs:RunTask
+            Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/jakenew:*'
+          - Effect: Allow
+            Action: [ecs:DescribeTasks, ecs:StopTask, ecs:ListTasks, ecs:TagResource]
+            Resource: '*'
+            Condition:
+              ArnEquals:
+                ecs:cluster: !GetAtt Cluster.Arn
+          - Effect: Allow
+            Action: ecs:DescribeTaskDefinition
+            Resource: '*'
+          - Effect: Allow
+            Action: iam:PassRole
+            Resource: [!GetAtt ExecutionRole.Arn, !GetAtt TaskRole.Arn]
+          - Effect: Allow
+            Action: [logs:GetLogEvents, logs:FilterLogEvents, logs:DescribeLogStreams]
+            Resource: [!GetAtt LogGroup.Arn, !Sub '${LogGroup.Arn}:*']
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  ClusterName:
+    Value: !Ref Cluster
+  SeedBucketName:
+    Value: !Ref SeedBucket
+  FileSystemId:
+    Value: !Ref FileSystem
+  LogGroupName:
+    Value: !Ref LogGroup
+  AirflowVariableJson:
+    Description: Paste as Airflow Variable `jakenew_ecs` (Admin > Variables).
+    Value: !Sub
+      - '{"cluster": "${Cluster}", "task_definition": "jakenew", "subnets": ["${SubnetA}", "${SubnetB}"], "security_groups": ["${TaskSecurityGroup}"], "assign_public_ip": "${AssignPublicIp}", "log_group": "${LogGroup}", "region": "${AWS::Region}"}'
+      - {}

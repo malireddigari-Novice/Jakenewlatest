@@ -1,0 +1,7 @@
+# Extra packages for the AWS container, on top of requirements.txt.
+# gspread / google-auth: the Mag 7 alerts Google Sheet (ALERTS_SHEET_ENABLED). Installed by hand on the Windows
+# box, never listed in requirements.txt.
+gspread>=6.2,<7
+google-auth>=2.30
+# boto3: first-run seed copy from S3 (deploy/aws/entrypoint.py).
+boto3>=1.34
